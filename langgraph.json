@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "uc1_validation": "./src/workflow/uc1_validation.py:create_uc1_validation_agent"
+  },
+  "env": ".env"
+}
