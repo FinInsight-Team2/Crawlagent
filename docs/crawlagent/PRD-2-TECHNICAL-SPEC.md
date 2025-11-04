@@ -710,6 +710,450 @@ print(f"h2 tags: {len(soup.find_all('h2'))}")  # 5개 발견
 
 ---
 
+## 📅 증분 수집 시스템 (Incremental Crawling System)
+
+**작성일**: 2025-11-03
+**목적**: 매일 자동 크롤링을 위한 날짜 기반 증분 수집 기능
+
+### 개요
+
+기존 카테고리 기반 크롤링에서 **날짜 기반 증분 수집**으로 확장하여, 특정 날짜의 기사만 수집하고 다음날 기사가 나타나면 자동으로 중단합니다.
+
+### 핵심 요구사항
+
+CEO 피드백:
+> "예를 들어 11월 2일 경제 카테고리 뉴스를 수집하고 11월 3일자 뉴스가 게시되면 수집을 중단하는 방식으로 운영해야 합니다."
+
+### 구현 방식
+
+#### 1. Spider 파라미터 추가
+
+```python
+# src/crawlers/spiders/yonhap.py
+
+class YonhapSpider(scrapy.Spider):
+    def __init__(self, target_date=None, category=None, *args, **kwargs):
+        """
+        Args:
+            target_date (str): YYYY-MM-DD 형식 (예: "2025-11-02")
+            category (str): politics, economy, society, international
+        """
+        if target_date:
+            self.target_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        else:
+            self.target_date = None  # 기본 동작: 모든 기사 수집
+```
+
+#### 2. 날짜 비교 로직
+
+```python
+def parse_article(self, response):
+    # 기사 날짜 추출
+    date_str = response.css('meta[property="article:published_time"]::attr(content)').get()
+    article_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+
+    # 증분 수집 필터링
+    if self.target_date:
+        if article_date > self.target_date:
+            return  # 다음날 기사 → 중단
+        if article_date < self.target_date:
+            return  # 이전날 기사 → 스킵
+        # article_date == self.target_date → 수집 계속
+```
+
+#### 3. DB 스키마 확장
+
+```sql
+-- scripts/migrations/001_add_incremental_fields.sql
+
+ALTER TABLE crawl_results
+ADD COLUMN crawl_date DATE,           -- 수집 날짜 (크롤러 실행일)
+ADD COLUMN article_date DATE,         -- 기사 발행 날짜
+ADD COLUMN is_latest BOOLEAN DEFAULT true;  -- 최신 버전 여부
+
+CREATE INDEX idx_crawl_date ON crawl_results(crawl_date);
+CREATE INDEX idx_article_date ON crawl_results(article_date);
+CREATE INDEX idx_is_latest ON crawl_results(is_latest);
+CREATE INDEX idx_article_date_is_latest ON crawl_results(article_date, is_latest);
+```
+
+#### 4. 사용 예시
+
+```bash
+# 특정 날짜 수집
+poetry run scrapy crawl yonhap -a target_date=2025-11-02
+
+# 특정 날짜 + 카테고리
+poetry run scrapy crawl yonhap -a target_date=2025-11-02 -a category=economy
+
+# 기본 동작 (날짜 필터 없음)
+poetry run scrapy crawl yonhap -a category=politics
+```
+
+### 이점
+
+1. **중복 방지**: 같은 날짜를 여러 번 수집해도 중복 없음
+2. **효율성**: 새 기사만 수집 (불필요한 재크롤링 제거)
+3. **히스토리 데이터**: 필요 시 특정 날짜 백필 가능
+4. **자동 중단**: 다음날 기사 발견 시 즉시 중단
+
+---
+
+## ⏰ 스케줄링 시스템 (Scheduling System)
+
+**작성일**: 2025-11-03
+**목적**: 매일 자동으로 어제 뉴스를 수집하는 스케줄러
+
+### 개요
+
+**APScheduler**를 사용하여 매일 자정 이후 자동으로 어제 날짜의 뉴스를 수집합니다.
+
+### 기술 선택: APScheduler
+
+| 옵션 | 장점 | 단점 | 결정 |
+|------|------|------|------|
+| **APScheduler** | Python 네이티브, 간단, PoC 충분 | 분산 환경 약함 | ✅ 선택 |
+| Celery | 프로덕션급, 분산 가능 | 복잡 (Redis/RabbitMQ 필요) | Phase 2 고려 |
+| Cron | OS 네이티브, 안정적 | Python 통합 약함 | 백업 옵션 |
+| GitHub Actions | CI/CD 통합 | 로컬 개발 불편 | 배포용 |
+
+**근거**: PoC 단계에서는 APScheduler로 충분. 추후 프로덕션에서 Celery로 전환 가능.
+
+### 구현
+
+#### 1. 스케줄러 파일
+
+```python
+# src/scheduler/daily_crawler.py
+
+from apscheduler.schedulers.blocking import BlockingScheduler
+from datetime import date, timedelta
+import subprocess
+
+def run_daily_crawl():
+    """어제 뉴스 증분 수집 실행"""
+    yesterday = date.today() - timedelta(days=1)
+    target_date = yesterday.strftime("%Y-%m-%d")
+
+    categories = ['politics', 'economy', 'society', 'international']
+
+    for category in categories:
+        cmd = [
+            "poetry", "run", "scrapy", "crawl", "yonhap",
+            "-a", f"target_date={target_date}",
+            "-a", f"category={category}"
+        ]
+        subprocess.run(cmd, capture_output=True, text=True)
+
+if __name__ == "__main__":
+    scheduler = BlockingScheduler()
+
+    # 매일 00:30에 실행 (자정 이후 모든 기사 발행 완료)
+    scheduler.add_job(
+        run_daily_crawl,
+        trigger='cron',
+        hour=0,
+        minute=30,
+        timezone='Asia/Seoul'
+    )
+
+    scheduler.start()
+```
+
+#### 2. 실행 방법
+
+```bash
+# 스케줄러 시작 (백그라운드 계속 실행)
+poetry run python src/scheduler/daily_crawler.py
+
+# 수동 테스트 (즉시 1회 실행)
+poetry run python src/scheduler/daily_crawler.py --test
+
+# systemd 서비스로 등록 (Linux 프로덕션)
+# /etc/systemd/system/crawlagent-scheduler.service
+```
+
+### 스케줄
+
+- **실행 시각**: 매일 00:30 (한국 시간)
+- **수집 날짜**: 어제 (실행일 - 1일)
+- **카테고리**: politics, economy, society, international (순차 실행)
+
+### 모니터링
+
+```python
+# 로그 확인
+tail -f logs/scheduler.log
+
+# 수집 결과 확인
+poetry run python -c "
+from src.storage.database import get_db
+from src.storage.models import CrawlResult
+from datetime import date, timedelta
+
+db = next(get_db())
+yesterday = date.today() - timedelta(days=1)
+results = db.query(CrawlResult).filter_by(article_date=yesterday).count()
+print(f'어제 수집 기사: {results}개')
+"
+```
+
+---
+
+## 🔄 버전 관리 시스템 (Dynamic Data & Versioning)
+
+**작성일**: 2025-11-03
+**목적**: SNS/블로그 등 동적 데이터 지원 준비 (Phase 2 대비)
+
+### 개요
+
+뉴스 기사는 발행 후 변경이 거의 없지만, SNS 게시물은 좋아요 수, 댓글 수 등이 지속적으로 변합니다. 향후 확장을 위해 동일 URL의 여러 버전을 관리할 수 있는 시스템을 준비합니다.
+
+CEO 피드백:
+> "SNS 데이터를 수집하는 경우 주기적인 크롤링을 통해 좋아요 수, 댓글 수 등 지속적으로 변하는 데이터를 반영해야 합니다."
+
+### DB 스키마 (선택적 필드)
+
+```sql
+-- Phase 2 준비: 주석 처리된 상태로 마이그레이션 파일에 포함
+
+ALTER TABLE crawl_results
+ADD COLUMN content_type VARCHAR(50) DEFAULT 'news',  -- 'news', 'sns', 'blog'
+ADD COLUMN metadata JSONB,                            -- SNS 메타데이터
+ADD COLUMN version INTEGER DEFAULT 1,                 -- 동일 URL 버전 번호
+ADD COLUMN last_updated TIMESTAMP;                    -- 마지막 업데이트
+
+CREATE INDEX idx_content_type ON crawl_results(content_type);
+CREATE INDEX idx_metadata ON crawl_results USING GIN (metadata);
+CREATE INDEX idx_version ON crawl_results(url, version);
+```
+
+### 동적 데이터 예시 (SNS)
+
+```python
+# Phase 2: SNS Spider 예시 (Twitter/X, Instagram 등)
+
+crawl_result = CrawlResult(
+    url="https://twitter.com/user/status/12345",
+    site_name="twitter",
+    content_type="sns",
+    title="게시물 텍스트",
+    metadata={
+        "likes": 1234,
+        "retweets": 567,
+        "comments": 89,
+        "views": 45678,
+        "posted_at": "2025-11-03T10:30:00Z"
+    },
+    version=1,  # 첫 수집
+    is_latest=True,
+    article_date=date(2025, 11, 3),
+    crawl_date=date.today()
+)
+
+# 1시간 후 재수집 (좋아요 수 증가)
+crawl_result_v2 = CrawlResult(
+    url="https://twitter.com/user/status/12345",
+    site_name="twitter",
+    content_type="sns",
+    title="게시물 텍스트",
+    metadata={
+        "likes": 1450,  # +216
+        "retweets": 612,  # +45
+        "comments": 102,  # +13
+        "views": 52340,  # +6662
+        "posted_at": "2025-11-03T10:30:00Z"
+    },
+    version=2,  # 두 번째 수집
+    is_latest=True,  # 이전 버전은 is_latest=False로 업데이트
+    article_date=date(2025, 11, 3),
+    crawl_date=date.today()
+)
+```
+
+### 재수집 스케줄 (Phase 2)
+
+```python
+# SNS 콘텐츠는 더 자주 수집 (1시간마다)
+scheduler.add_job(
+    run_sns_crawl,
+    trigger='interval',
+    hours=1,  # 1시간마다
+    id='sns_recrawl'
+)
+```
+
+### 이점
+
+1. **히스토리 추적**: 동일 URL의 시간별 변화 분석 가능
+2. **유연성**: JSONB로 사이트별 커스텀 메타데이터 저장
+3. **확장성**: 뉴스 → SNS → 블로그 → 이커머스로 자연스럽게 확장
+4. **쿼리 효율**: `is_latest=true` 필터로 최신 버전만 조회
+
+---
+
+## 🧩 확장 가능한 아키텍처 (Extensible Architecture)
+
+**작성일**: 2025-11-03
+**목적**: 향후 다양한 콘텐츠 타입 지원을 위한 확장 가능한 설계
+
+### 개요
+
+현재는 뉴스 사이트 3개에 집중하지만, 향후 SNS, 블로그, 이커머스 리뷰 등으로 확장 가능하도록 설계합니다.
+
+CEO 피드백:
+> "뉴스 수집에 국한되지 않고, 향후 확장 가능성을 고려하여 시스템을 설계해야 합니다."
+
+### Content Type 기반 확장
+
+#### 1. Content Type 분류
+
+```python
+# src/crawlers/content_types.py
+
+from enum import Enum
+
+class ContentType(Enum):
+    NEWS = "news"           # 뉴스 기사 (Phase 1)
+    SNS = "sns"             # SNS 게시물 (Phase 2)
+    BLOG = "blog"           # 블로그 포스트 (Phase 2)
+    ECOMMERCE = "ecommerce" # 상품 리뷰 (Phase 3)
+    FORUM = "forum"         # 커뮤니티 게시물 (Phase 3)
+```
+
+#### 2. Spider 확장 패턴
+
+```
+src/crawlers/spiders/
+├── news/
+│   ├── yonhap.py           ✅ Phase 1 (완료)
+│   ├── naver_economy.py    ✅ Phase 1 (완료)
+│   └── bbc.py              ✅ Phase 1 (완료)
+├── sns/                    🔜 Phase 2
+│   ├── twitter.py
+│   ├── instagram.py
+│   └── facebook.py
+├── blog/                   🔜 Phase 2
+│   ├── naver_blog.py
+│   └── medium.py
+└── base_spider.py          # 공통 로직 추상화
+```
+
+#### 3. Base Spider 추상화
+
+```python
+# src/crawlers/spiders/base_spider.py
+
+from abc import ABC, abstractmethod
+import scrapy
+
+class BaseContentSpider(scrapy.Spider, ABC):
+    """
+    모든 Spider의 공통 로직을 추상화
+
+    - DB 저장
+    - 품질 점수 계산
+    - 증분 수집 (target_date)
+    - 에러 핸들링
+    """
+
+    def __init__(self, target_date=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target_date = self.parse_target_date(target_date)
+
+    @abstractmethod
+    def extract_title(self, response):
+        """각 사이트별 title 추출 로직"""
+        pass
+
+    @abstractmethod
+    def extract_body(self, response):
+        """각 사이트별 body 추출 로직"""
+        pass
+
+    @abstractmethod
+    def extract_date(self, response):
+        """각 사이트별 date 추출 로직"""
+        pass
+
+    def save_to_db(self, data):
+        """공통 DB 저장 로직"""
+        pass
+```
+
+### Workflow 확장성
+
+#### 1. LangGraph State 확장
+
+```python
+# src/workflow/state.py
+
+from typing import TypedDict, Literal
+
+class CrawlState(TypedDict):
+    url: str
+    site_name: str
+    content_type: Literal["news", "sns", "blog", "ecommerce"]  # 확장 가능
+    category: str
+    data: dict
+    quality_score: int
+    retry_count: int
+    error: str | None
+```
+
+#### 2. Content Type별 품질 기준
+
+```python
+# src/validation/quality_checker.py
+
+class QualityChecker:
+    def calculate_score(self, content_type: str, data: dict) -> int:
+        if content_type == "news":
+            return self._score_news(data)  # 5W1H 기준
+        elif content_type == "sns":
+            return self._score_sns(data)   # engagement 기준
+        elif content_type == "blog":
+            return self._score_blog(data)  # readability 기준
+        else:
+            raise ValueError(f"Unknown content type: {content_type}")
+
+    def _score_news(self, data):
+        """뉴스 기사 품질 (기존 로직)"""
+        score = 0
+        if len(data['title']) >= 10: score += 20
+        if len(data['body']) >= 500: score += 60
+        if data['date']: score += 10
+        if data['url'].startswith('http'): score += 10
+        return score
+
+    def _score_sns(self, data):
+        """SNS 게시물 품질"""
+        score = 0
+        if data['text']: score += 40
+        if data['metadata']['likes'] > 100: score += 20
+        if data['metadata']['comments'] > 10: score += 20
+        if data['author_verified']: score += 20
+        return score
+```
+
+### 확장 로드맵
+
+| Phase | Content Type | 예상 기간 | 복잡도 |
+|-------|--------------|-----------|--------|
+| **Phase 1** (PoC) | News (3 sites) | ✅ 완료 | 낮음 |
+| **Phase 2** | SNS (Twitter, Instagram) | 2주 | 중간 (API 인증) |
+| **Phase 3** | Blog (네이버, Medium) | 1주 | 낮음 (SSR) |
+| **Phase 4** | E-commerce (리뷰) | 2주 | 높음 (SPA + 로그인) |
+
+### 설계 원칙
+
+1. **모듈화**: Content Type별로 독립적인 Spider 개발
+2. **추상화**: BaseSpider로 공통 로직 재사용
+3. **확장성**: 새 Content Type 추가 시 기존 코드 수정 불필요
+4. **유연성**: JSONB metadata로 사이트별 커스텀 필드 지원
+
+---
+
 ## 🔗 참고 자료 (References)
 
 ### 기술 문서
@@ -729,6 +1173,12 @@ print(f"h2 tags: {len(soup.find_all('h2'))}")  # 5개 발견
 
 ---
 
-**문서 상태**: ✅ 최종 업데이트 완료 (2025-10-30)
-**버전**: 2.0 (Scrapy 단일 프레임워크, 장애 복구 로직 추가)
-**다음 단계**: [00-PRD-3-IMPLEMENTATION.md](./00-PRD-3-IMPLEMENTATION.md) 참조
+**문서 상태**: ✅ 최종 업데이트 완료 (2025-11-03)
+**버전**: 3.0 (증분 수집, 스케줄링, 확장 가능한 아키텍처 추가)
+**변경 사항**:
+- 증분 수집 시스템 (날짜 기반 필터링)
+- 스케줄링 시스템 (APScheduler, 매일 자동 실행)
+- 버전 관리 시스템 (SNS/동적 데이터 준비)
+- 확장 가능한 아키텍처 (Content Type 기반 설계)
+
+**다음 단계**: [00-PRD-3-IMPLEMENTATION.md](./00-PRD-3-IMPLEMENTATION.md) 참조 → UC2 개발 시작

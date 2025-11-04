@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     Float,
     Integer,
     String,
@@ -107,6 +108,39 @@ class CrawlResult(Base):
     )
     crawl_duration_seconds = Column(Float, nullable=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)
+
+    # 증분 수집 필드 (Incremental Crawling Support)
+    crawl_date = Column(Date, nullable=True, index=True, comment="수집 날짜 (크롤러 실행일)")
+    article_date = Column(Date, nullable=True, index=True, comment="기사 발행 날짜")
+    is_latest = Column(Boolean, default=True, nullable=False, index=True, comment="최신 버전 여부")
+
+    # Phase 2: Content-Type 및 품질 검증 필드
+    content_type = Column(
+        String(20),
+        CheckConstraint("content_type IN ('news', 'blog', 'community')"),
+        default='news',
+        nullable=False,
+        index=True,
+        comment="콘텐츠 타입 (news/blog/community)"
+    )
+    meta_data = Column(JSONB, nullable=True, comment="비정형 메타데이터 (조회수, 추천수 등)")
+
+    validation_status = Column(
+        String(20),
+        CheckConstraint("validation_status IN ('pending', 'verified', 'rejected')"),
+        default='pending',
+        nullable=False,
+        index=True,
+        comment="검증 상태 (pending/verified/rejected)"
+    )
+    validation_method = Column(
+        String(20),
+        CheckConstraint("validation_method IN ('rule', 'llm', '2-agent')"),
+        default='llm',
+        nullable=True,
+        comment="검증 방법 (rule/llm/2-agent)"
+    )
+    llm_reasoning = Column(Text, nullable=True, comment="LLM 판단 근거")
 
     @validates("quality_score")
     def validate_quality_score(self, key: str, value: Optional[int]) -> Optional[int]:
