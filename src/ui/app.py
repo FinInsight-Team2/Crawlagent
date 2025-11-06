@@ -260,8 +260,8 @@ def create_app():
 
                 single_output = gr.HTML(label="실시간 크롤링 결과")
 
-                # 로그 출력 영역 (접을 수 있음)
-                with gr.Accordion("📋 크롤링 로그", open=False):
+                # 로그 출력 영역 (기본 열림)
+                with gr.Accordion("📋 실시간 로그", open=True):
                     single_log = gr.Textbox(
                         label="실시간 로그",
                         lines=15,
@@ -327,11 +327,9 @@ def create_app():
                         log_lines = result.stdout.split('\n') if result.stdout else []
                         important_logs = []
                         for line in log_lines:
-                            # 더 넓은 범위로 로그 캡처
+                            # 핵심 키워드만 필터링 (로그 폭발 방지)
                             if any(keyword in line for keyword in [
-                                '[yonhap]', 'UC1 Quality Gate', 'PASS', 'REJECT',
-                                'SUCCESS', 'ERROR', 'DUPLICATE', '증분 수집',
-                                'STAGE 1', 'STAGE 2', 'Found', 'Queued', 'Saved'
+                                'UC1 Quality Gate', 'REJECT', 'ERROR', 'Spider closed'
                             ]):
                                 # 타임스탬프 제거
                                 if '[yonhap]' in line:
@@ -465,8 +463,8 @@ def create_app():
 
                 batch_output = gr.HTML(label="일간 수집 결과")
 
-                # 일간 수집 로그 (접을 수 있음)
-                with gr.Accordion("📋 일간 수집 로그", open=False):
+                # 일간 수집 로그 (기본 열림)
+                with gr.Accordion("📋 실시간 로그", open=True):
                     batch_log = gr.Textbox(
                         label="실시간 로그",
                         lines=20,
@@ -502,6 +500,7 @@ def create_app():
                     try:
                         # Progress: 시작
                         progress(0, desc=f"🚀 {target_date} 일간 수집 시작...")
+                        gr.Info(f"🚀 {target_date} 일간 수집 시작!")
                         start_time = datetime.now()
 
                         cmd = [
@@ -540,6 +539,10 @@ def create_app():
                             progress_pct = min(0.1 + (elapsed_seconds / timeout_seconds) * 0.8, 0.9)
                             progress(progress_pct, desc=f"📰 기사 수집 중... ({article_count}개)")
 
+                            # 5초마다 토스트 알림
+                            if int(elapsed_seconds) % 10 == 0 and article_count > 0:
+                                gr.Info(f"📰 {article_count}개 수집 중...")
+
                             # 타임아웃 체크
                             if elapsed_seconds >= timeout_seconds:
                                 process.kill()
@@ -556,13 +559,20 @@ def create_app():
                             if process.poll() is not None:
                                 # 남은 로그 읽기
                                 for line in process.stdout:
+                                    # 제외할 키워드
+                                    exclude_keywords = [
+                                        '증분 수집 스킵',
+                                        'DUPLICATE',
+                                        'Crawled (200)',
+                                    ]
+
+                                    if any(exc in line for exc in exclude_keywords):
+                                        continue
+
+                                    # 핵심 키워드만 (로그 폭발 방지)
                                     if any(keyword in line for keyword in [
-                                        '[yonhap]', 'UC1 Quality Gate', 'PASS', 'REJECT',
-                                        'SUCCESS', 'ERROR', 'DUPLICATE', '증분 수집',
-                                        'STAGE 1', 'STAGE 2', 'Found', 'Queued', 'Saved',
-                                        'PAGINATION', '최대 페이지'
+                                        'Queued', 'REJECT', 'PAGINATION', '최대 페이지', 'Spider closed'
                                     ]):
-                                        # 타임스탬프 제거
                                         if '[yonhap]' in line:
                                             parts = line.split('[yonhap]')
                                             if len(parts) > 1:
@@ -575,15 +585,28 @@ def create_app():
                             # 실시간 로그 읽기
                             line = process.stdout.readline()
                             if line:
-                                # 수집 개수 추적 (PASS 키워드로 판단)
-                                if 'PASS' in line or 'Saved' in line:
+                                # 수집 개수 추적 (SUCCESS Saved 키워드로 판단)
+                                if 'SUCCESS' in line and 'Saved' in line:
                                     article_count += 1
 
+                                # 제외할 키워드 (로그 폭발 방지)
+                                exclude_keywords = [
+                                    '증분 수집 스킵',  # 너무 많음 (208개)
+                                    'DUPLICATE',      # 중복은 정상 동작
+                                    'Crawled (200)',  # HTTP 200 로그
+                                ]
+
+                                # 제외 키워드가 있으면 스킵
+                                if any(exc in line for exc in exclude_keywords):
+                                    continue
+
+                                # 핵심 키워드만 필터링 (로그 폭발 방지: PASS/SUCCESS 제외)
                                 if any(keyword in line for keyword in [
-                                    '[yonhap]', 'UC1 Quality Gate', 'PASS', 'REJECT',
-                                    'SUCCESS', 'ERROR', 'DUPLICATE', '증분 수집',
-                                    'STAGE 1', 'STAGE 2', 'Found', 'Queued', 'Saved',
-                                    'PAGINATION', '최대 페이지'
+                                    'Queued',         # 큐에 추가된 기사 수
+                                    'REJECT',         # UC1 거부 (중요)
+                                    'PAGINATION',     # 페이지네이션
+                                    '최대 페이지',     # 페이지 한계
+                                    'Spider closed',  # 크롤링 완료
                                 ]):
                                     # 타임스탬프 제거
                                     if '[yonhap]' in line:

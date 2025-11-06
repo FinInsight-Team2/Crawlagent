@@ -341,8 +341,131 @@ Criteria:
 
 
 # ============================================================================
-# 다음 단계: StateGraph 구성
+# Human Review Node (HITL)
 # ============================================================================
 
-# TODO: build_uc2_graph() - StateGraph 생성 및 compile
-# TODO: 테스트 스크립트 작성
+def human_review_node(state: HITLState) -> HITLState:
+    """
+    Human-in-the-Loop Node
+
+    3회 재시도 후에도 합의 실패 시, 사람의 최종 승인을 받는 Node
+
+    동작:
+    1. GPT 제안과 Gemini 검증 결과를 사람에게 제시
+    2. 사람이 승인/거부/수정 선택
+    3. 승인 시 → final_selectors 저장
+    4. 거부 시 → error_message 설정
+    """
+    logger.info(f"[Human Review Node] HITL triggered for {state['url']}")
+
+    # TODO: Gradio UI 통합 시 구현
+    # 현재는 자동 승인 (임시)
+    gpt_proposal = state.get("gpt_proposal")
+
+    logger.warning(
+        f"[Human Review] Auto-approving proposal (TODO: implement UI)\n"
+        f"Proposal: {gpt_proposal}"
+    )
+
+    return {
+        **state,
+        "consensus_reached": True,
+        "final_selectors": gpt_proposal,
+        "next_action": "end"
+    }
+
+
+# ============================================================================
+# Routing Function (조건부 Edge를 위한 라우팅)
+# ============================================================================
+
+def route_after_validation(state: HITLState) -> str:
+    """
+    Gemini Validate Node 이후의 라우팅 결정
+
+    반환값:
+    - "end": 합의 성공 → 워크플로우 종료
+    - "retry": 재시도 필요 → GPT Propose로 돌아감
+    - "human_review": HITL 발동 → Human Review Node로 이동
+    """
+    next_action = state.get("next_action", "end")
+
+    logger.info(f"[Router] After validation, next_action: {next_action}")
+
+    return next_action
+
+
+# ============================================================================
+# StateGraph 구성
+# ============================================================================
+
+from langgraph.graph import StateGraph, END
+
+
+def build_uc2_graph():
+    """
+    UC2 HITL 워크플로우의 StateGraph를 생성하고 compile
+
+    반환값: Compiled LangGraph app
+
+    그래프 구조:
+
+        START
+          ↓
+      gpt_propose (GPT-4o-mini)
+          ↓
+      gemini_validate (Gemini-2.0-flash)
+          ↓
+      ┌───────────────┐
+      │ route_after_  │
+      │  validation   │
+      └───────────────┘
+         ↓    ↓    ↓
+       END  retry  human_review
+              ↓         ↓
+        gpt_propose   END
+    """
+    logger.info("[build_uc2_graph] Building LangGraph StateGraph...")
+
+    # 1. StateGraph 생성
+    workflow = StateGraph(HITLState)
+
+    # 2. Node 추가
+    workflow.add_node("gpt_propose", gpt_propose_node)
+    workflow.add_node("gemini_validate", gemini_validate_node)
+    workflow.add_node("human_review", human_review_node)
+
+    # 3. Entry Point 설정
+    workflow.set_entry_point("gpt_propose")
+
+    # 4. Edge 추가
+    # GPT → Gemini (항상 실행)
+    workflow.add_edge("gpt_propose", "gemini_validate")
+
+    # Gemini → 조건부 분기
+    workflow.add_conditional_edges(
+        "gemini_validate",
+        route_after_validation,
+        {
+            "end": END,                    # 합의 성공 → 종료
+            "retry": "gpt_propose",        # 재시도 → GPT 다시 실행
+            "human_review": "human_review" # HITL 발동
+        }
+    )
+
+    # Human Review → 종료 (항상)
+    workflow.add_edge("human_review", END)
+
+    # 5. Compile
+    app = workflow.compile()
+
+    logger.info("[build_uc2_graph] StateGraph compiled successfully")
+
+    return app
+
+
+# ============================================================================
+# 다음 단계: 테스트 스크립트 작성
+# ============================================================================
+
+# TODO: 테스트 스크립트 작성 (test_uc2_hitl.py)

@@ -178,6 +178,10 @@ class YonhapSpider(scrapy.Spider):
                     continue
                 seen_urls.add(article_id)
 
+                # NOTE: URL의 날짜(AKR20251104...)는 기사 ID 생성일이며,
+                # 실제 발행일(article:published_time)과 다를 수 있음
+                # 따라서 Stage 2(parse_article)에서만 날짜 필터링 수행
+
                 # Rebuild clean URL
                 clean_url = f"https://www.yna.co.kr/view/{article_id}"
 
@@ -191,7 +195,14 @@ class YonhapSpider(scrapy.Spider):
                     }
                 )
 
-        self.logger.info(f"[STAGE 1] Queued {len(seen_urls)} unique articles from {category_kr}")
+        # 큐 통계 로깅
+        queued_count = len(seen_urls)
+        if self.target_date:
+            self.logger.info(
+                f"[STAGE 1] Queued {queued_count} articles for Stage 2 (target: {self.target_date})"
+            )
+        else:
+            self.logger.info(f"[STAGE 1] Queued {queued_count} unique articles from {category_kr}")
 
         # 페이지네이션: 현재 페이지 다음 번호 링크 찾기
         # <strong class="num on">1</strong> 다음의 <a class="num">2</a> 를 찾음
