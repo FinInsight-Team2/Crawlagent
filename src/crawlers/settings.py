@@ -1,15 +1,16 @@
 """
-NewsFlow PoC - Scrapy Settings
+CrawlAgent - Scrapy Settings
 Created: 2025-10-28
+Updated: 2025-11-06
 
 Scrapy 크롤러 설정:
 - User-Agent: 한국 뉴스 사이트 크롤링용
 - Download delay: 1초 (예의)
-- scrapy-playwright 설정 (BBC News용)
+- Multi-Agent Self-Healing Crawler
 """
 
 # Scrapy project name
-BOT_NAME = "newsflow_crawler"
+BOT_NAME = "crawlagent"
 
 # Spider modules
 SPIDER_MODULES = ["src.crawlers.spiders"]

@@ -1,1 +1,1 @@
-"""NewsFlow PoC - Crawlers Module"""
+"""CrawlAgent - Scrapy Crawlers Module"""

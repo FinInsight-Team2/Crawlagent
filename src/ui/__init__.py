@@ -1,1 +1,1 @@
-"""NewsFlow PoC - UI Module"""
+"""CrawlAgent - Gradio UI Components"""

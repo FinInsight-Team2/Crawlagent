@@ -1,11 +1,12 @@
 """
-NewsFlow PoC - SQLAlchemy ORM Models
+CrawlAgent - SQLAlchemy ORM Models
 Created: 2025-10-28
+Updated: 2025-11-06
 
 PostgreSQL 16 테이블에 대한 ORM 모델 정의:
-- Selector: CSS Selector 저장 (3개 사이트)
+- Selector: CSS Selector 저장 (Multi-Site Support)
 - CrawlResult: 크롤링 결과 저장
-- DecisionLog: 2-Agent 합의 로그 (JSONB)
+- DecisionLog: Multi-Agent 합의 로그 (JSONB)
 """
 
 from datetime import datetime
@@ -124,6 +125,15 @@ class CrawlResult(Base):
         comment="콘텐츠 타입 (news/blog/community)"
     )
     meta_data = Column(JSONB, nullable=True, comment="비정형 메타데이터 (조회수, 추천수 등)")
+
+    # URL 카테고리 힌트 필드 (Phase 1.2)
+    url_category_confidence = Column(
+        Float,
+        CheckConstraint("url_category_confidence >= 0.0 AND url_category_confidence <= 1.0"),
+        default=0.0,
+        nullable=False,
+        comment="URL에서 추출한 카테고리 신뢰도 (0.0~1.0)"
+    )
 
     validation_status = Column(
         String(20),

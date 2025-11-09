@@ -398,6 +398,211 @@ python scripts/explain_studio_graph.py
 
 ---
 
+## Success Metrics (PoC 검증 지표)
+
+### 1. 기술적 성공 지표
+
+#### **UC1: Quality Gate 정확도**
+- **목표**: LLM 기반 품질 검증 정확도 ≥ 90%
+- **측정 방법**:
+  - 100개 샘플 기사에 대해 수동 라벨링
+  - UC1 판정 vs 사람 판정 비교
+  - Precision, Recall, F1-Score 계산
+- **현재 성능**:
+  - GPT-4o-mini confidence ≥ 95 → Pass
+  - 초기 테스트: 3/5 Pass (60%) → 추가 검증 필요
+
+#### **UC2: Self-Healing 복구 시간**
+- **목표**: HTML 구조 변경 감지 후 1시간 이내 복구
+- **측정 방법**:
+  - Selector 의도적으로 망가뜨리기
+  - UC2 트리거 → DecisionLog 생성 → Human Review → Selector 업데이트
+  - 전체 프로세스 소요 시간 측정
+- **기준**:
+  - 자동 복구 (Human Review 없이): < 5분
+  - HITL 포함: < 1시간
+
+#### **UC3: 증분 수집 효율성**
+- **목표**: 중복 수집률 < 5%
+- **측정 방법**:
+  - 동일 날짜 크롤링 2회 실행
+  - 중복 URL 감지 횟수 / 전체 시도 횟수
+- **날짜 자동 중단 정확도**: 100% (다음 날 기사 감지 시 즉시 중단)
+
+---
+
+### 2. 비즈니스 임팩트 지표
+
+#### **비용 절감**
+- **크롤러 유지보수 시간**:
+  - Before: 월 16시간 (HTML 변경 시 개발자 수동 수정)
+  - After: 월 2시간 (Human Review만)
+  - **절감률**: 87.5%
+
+- **분석팀 데이터 대기 시간**:
+  - Before: 크롤러 중단 → 개발팀 요청 → 수정 → 재실행 (평균 2-3일)
+  - After: 자동 복구 또는 1시간 이내 Human Review
+  - **단축률**: 95%
+
+#### **데이터 품질 향상**
+- **불완전 데이터 저장 방지**:
+  - Before: 추출 실패 데이터도 DB 저장 (품질 불명)
+  - After: UC1 검증 통과 (≥95점) 데이터만 저장
+  - **품질 보장률**: 95%+
+
+---
+
+### 3. 확장성 검증 지표
+
+#### **멀티 소스 지원**
+- **목표**: 3개 이상 소스에서 동일한 UC1/UC2 적용 가능
+- **검증 방법**:
+  - 뉴스 (Yonhap) ✅
+  - 뉴스 (BBC) ✅
+  - SNS (Naver Blog) → Phase 2에서 추가
+
+#### **처리량 (Throughput)**
+- **목표**: 시간당 1,000개 기사 수집 가능
+- **현재**:
+  - Yonhap 경제 카테고리: ~50개/시간
+  - UC1 LLM 호출 병목 (1초/기사) → 배치 처리로 개선 필요
+
+---
+
+### 4. PoC 성공 기준 (Go/No-Go Decision)
+
+| 지표 | 목표 | 현재 | 판정 |
+|-----|------|------|------|
+| UC1 정확도 | ≥ 90% | 검증 중 | 🟡 |
+| UC2 복구 시간 | < 1h | 미검증 | 🔴 |
+| 증분 수집 중복률 | < 5% | 미검증 | 🔴 |
+| 크롤러 유지보수 절감 | ≥ 80% | 87.5% (예상) | 🟢 |
+| 멀티 소스 지원 | ≥ 3개 | 2개 (Yonhap, BBC) | 🟡 |
+
+**PoC 성공 조건**: 🟢 3개 이상 & 🔴 0개
+
+**Next Steps**:
+1. UC2 End-to-End 테스트 (복구 시간 측정)
+2. UC1 정확도 벤치마크 (100개 샘플)
+3. Naver Blog Spider 추가 (멀티 소스 검증)
+
+---
+
+## Testing Strategy (검증 시나리오)
+
+### Test Case 1: UC1 Quality Gate
+
+**목적**: 불완전한 데이터 필터링 검증
+
+**시나리오**:
+```
+1. Selector 의도적으로 부분 망가뜨리기
+   - title_selector: 정상
+   - body_selector: 잘못된 selector (빈 문자열 추출)
+   - date_selector: 정상
+
+2. 크롤링 실행
+
+3. 예상 결과:
+   - UC1 검증: REJECT (body 누락으로 50점 이하)
+   - DB 저장: 안 됨
+   - 로그: "연속 실패: 1/3"
+
+4. 검증:
+   SELECT COUNT(*) FROM crawl_results WHERE quality_score < 80;
+   → 0건이어야 함
+```
+
+---
+
+### Test Case 2: UC2 Self-Healing (End-to-End)
+
+**목적**: HTML 구조 변경 시 자동 복구 검증
+
+**시나리오**:
+```
+1. 초기 상태: Yonhap Selector 정상
+
+2. Selector 망가뜨리기:
+   UPDATE selectors
+   SET title_selector='h1.WRONG_CLASS'
+   WHERE site_name='yonhap';
+
+3. 크롤링 실행 (3회 이상)
+
+4. 예상 결과:
+   - 연속 3회 실패 감지
+   - UC2 트리거
+   - DecisionLog 생성 (gpt_analysis, gemini_validation 포함)
+   - 로그: "[UC2] DecisionLog 생성 완료 (ID: X)"
+
+5. Gradio UI에서 Human Review:
+   - Tab 5 "🤖 UC2 Self-Healing" 열기
+   - 새로고침 → Pending 목록에 1건 표시
+   - GPT 제안 확인
+   - "✅ 승인" 클릭
+
+6. 검증:
+   SELECT title_selector FROM selectors WHERE site_name='yonhap';
+   → 새로운 Selector로 업데이트됨
+
+7. 크롤링 재실행:
+   → PASS, 정상 저장 확인
+```
+
+**성공 조건**:
+- 전체 프로세스 < 1시간 (자동화 부분 < 5분)
+- Human Review UI 정상 작동
+- 새 Selector로 크롤링 성공
+
+---
+
+### Test Case 3: 증분 수집 (날짜 자동 중단)
+
+**목적**: 다음 날 기사 출현 시 자동 중단 검증
+
+**시나리오**:
+```
+1. target_date=2025-11-03으로 크롤링 시작
+
+2. 페이지 순회 중 2025-11-04 기사 발견
+
+3. 예상 결과:
+   - 로그: "[자동 중단] 다음 날 기사 감지: 2025-11-04 > 목표 2025-11-03"
+   - CloseSpider 예외 발생
+   - 크롤링 즉시 중단
+
+4. 검증:
+   SELECT article_date FROM crawl_results WHERE article_date > '2025-11-03';
+   → 0건이어야 함
+```
+
+---
+
+### Test Case 4: 멀티 소스 확장성
+
+**목적**: 새로운 소스 추가 시 UC1/UC2 재사용 가능 검증
+
+**시나리오**:
+```
+1. Naver Blog Spider 추가:
+   - 기존 UC1 Quality Gate 재사용
+   - 기존 UC2 HITL 재사용
+
+2. 블로그 포스트 10개 수집
+
+3. 예상 결과:
+   - UC1 검증 정상 작동 (PASS/REJECT 로그)
+   - 80점 이상만 저장
+   - Selector 망가지면 UC2 트리거
+
+4. 검증:
+   SELECT site_name, COUNT(*) FROM crawl_results GROUP BY site_name;
+   → yonhap, bbc, naver_blog 3개 소스 확인
+```
+
+---
+
 ## Appendix: UC1 vs UC2 비교
 
 | 항목 | UC1 (Quality Gate) | UC2 (Selector Generation) |

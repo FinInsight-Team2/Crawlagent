@@ -1,6 +1,10 @@
-# NewsFlow PoC - 뉴스 크롤링 시스템
+# CrawlAgent - LangGraph Multi-Agent Self-Healing Web Crawler
 
-회사 내부 뉴스 데이터 수집 및 관리 도구
+> **이전 명칭**: NewsFlow PoC (제안서/보고서용)
+> **공식 명칭**: CrawlAgent (pyproject.toml)
+> **업데이트**: 2025-11-06
+
+범용 Self-Healing Multi-Agent 데이터 수집 시스템 - 뉴스, SNS, 블로그 등 다양한 웹 소스의 HTML 구조 변경에 자동으로 대응하는 지능형 크롤러
 
 ---
 
@@ -9,8 +13,8 @@
 ### 1. Gradio UI 실행
 
 ```bash
-cd /Users/charlee/Desktop/Intern/NewsFlow/newsflow-poc
-poetry run python -m src.ui.app
+cd /Users/charlee/Desktop/Intern/crawlagent
+poetry run python src/ui/app.py
 ```
 
 → 브라우저에서 http://127.0.0.1:7860 열기
@@ -18,10 +22,11 @@ poetry run python -m src.ui.app
 ### 2. LangGraph Studio 실행 (개발자용)
 
 ```bash
-poetry run langgraph dev
+cd /Users/charlee/Desktop/Intern/crawlagent
+poetry run langgraph dev --tunnel
 ```
 
-→ http://127.0.0.1:2024
+→ Cloudflare Tunnel URL 확인
 
 ---
 

@@ -1,7 +1,7 @@
 """
-NewsFlow PoC - Yonhap News Spider (2-Stage Crawling)
+CrawlAgent - Yonhap News Spider (2-Stage Crawling)
 Created: 2025-10-28
-Updated: 2025-10-30
+Updated: 2025-11-06
 
 연합뉴스 크롤러 (SSR) - Category-based 2-stage crawling
 - Site: https://www.yna.co.kr
@@ -49,12 +49,73 @@ class YonhapSpider(scrapy.Spider):
         'sports': '스포츠'
     }
 
+    def trigger_uc2_workflow(self, url: str) -> None:
+        """
+        UC2 Self-Healing 워크플로우 트리거
+
+        연속 3회 UC1 실패 시 호출됨.
+        UC2는 Multi-Agent (GPT + Gemini)를 사용하여 새로운 CSS Selector를 제안하고,
+        DecisionLog 테이블에 저장하여 Human Review를 대기합니다.
+        """
+        self.logger.warning(
+            f"[UC2 트리거] 연속 {self.failure_count}회 실패 감지 → Self-Healing 시작"
+        )
+
+        try:
+            import requests
+            from src.storage.database import get_db
+            from src.storage.models import DecisionLog
+
+            # 1. HTML 페이지 다시 가져오기
+            response = requests.get(url, timeout=30)
+            html_content = response.text
+
+            # 2. UC2 HITL 워크플로우 실행 (또는 decision_log 생성)
+            # 실제 환경에서는 LangGraph workflow를 실행하지만,
+            # 여기서는 단순히 DecisionLog에 "pending" 상태로 기록
+            db = next(get_db())
+            try:
+                log = DecisionLog(
+                    url=url,
+                    site_name="yonhap",
+                    gpt_analysis={"note": "UC1 failure triggered UC2, awaiting GPT analysis"},
+                    gemini_validation={"note": "Awaiting Gemini validation"},
+                    consensus_reached=False,  # Human review 필요
+                    retry_count=0
+                )
+                db.add(log)
+                db.commit()
+
+                self.logger.info(
+                    f"[UC2] DecisionLog 생성 완료 (ID: {log.id}) - Gradio UI에서 확인 가능"
+                )
+            finally:
+                db.close()
+
+            self.uc2_triggered = True  # 중복 트리거 방지
+
+        except Exception as e:
+            self.logger.error(f"[UC2 실패] {str(e)}")
+
     def __init__(self, category=None, start_urls=None, target_date=None, *args, **kwargs):
         super(YonhapSpider, self).__init__(*args, **kwargs)
 
         # 페이지네이션 추적용 카운터 (무한 루프 방지)
         self.pages_crawled = {}  # {category: page_count}
-        self.MAX_PAGES_PER_CATEGORY = 15  # 카테고리당 최대 15페이지 (타임아웃 방지)
+        self.MAX_PAGES_PER_CATEGORY = 50  # 카테고리당 최대 50페이지 (자동 중단 우선)
+
+        # UC1 → UC2 자동 연동: 연속 실패 추적
+        self.failure_count = 0  # 연속 실패 카운트
+        self.MAX_FAILURES_BEFORE_UC2 = 3  # UC2 트리거 임계값
+        self.uc2_triggered = False  # UC2 이미 트리거 여부 (중복 방지)
+
+        # 날짜 기반 조기 중단: 연속 스킵 추적
+        self.consecutive_skips = {}  # {category: skip_count}
+        self.MAX_CONSECUTIVE_SKIPS = 25  # 25개 연속 스킵 = 1페이지 전체 (조기 중단)
+
+        # 페이지 단위 조기 중단: 페이지별 날짜 추적
+        self.page_old_article_count = {}  # {category: count} - 현재 페이지에서 오래된 기사 개수
+        self.STOP_PAGINATION_THRESHOLD = 20  # 1페이지에서 20개 이상 오래된 기사 → 페이지네이션 중단
 
         # 날짜 기반 증분 수집 (Incremental Crawling)
         if target_date:
@@ -103,6 +164,43 @@ class YonhapSpider(scrapy.Spider):
             self.logger.info(f"[INIT] Loaded selector for yonhap")
         finally:
             db.close()
+
+    def extract_category_from_url(self, url: str) -> tuple:
+        """
+        URL에서 카테고리 추출 및 신뢰도 반환
+
+        Args:
+            url: 기사 URL (예: https://www.yna.co.kr/economy/all/6)
+
+        Returns:
+            tuple: (category, confidence)
+            - category: 추출된 카테고리 (없으면 None)
+            - confidence: 신뢰도 (0.0~1.0)
+
+        Examples:
+            >>> extract_category_from_url("https://www.yna.co.kr/economy/all/6")
+            ('economy', 0.95)
+            >>> extract_category_from_url("https://www.yna.co.kr/view/AKR123")
+            (None, 0.0)
+        """
+        import re
+
+        patterns = {
+            r'/economy/': ('economy', 0.95),
+            r'/politics/': ('politics', 0.95),
+            r'/society/': ('society', 0.95),
+            r'/international/': ('international', 0.95),
+            r'/sports/': ('sports', 0.95),
+            r'/industry/': ('economy', 0.85),  # 산업 → 경제로 매핑 (약간 낮은 신뢰도)
+            r'/stock/': ('economy', 0.90),     # 주식 → 경제
+            r'/market/': ('economy', 0.90),    # 시장 → 경제
+        }
+
+        for pattern, (cat, conf) in patterns.items():
+            if re.search(pattern, url):
+                return (cat, conf)
+
+        return (None, 0.0)
 
     def parse(self, response):
         """
@@ -204,6 +302,41 @@ class YonhapSpider(scrapy.Spider):
         else:
             self.logger.info(f"[STAGE 1] Queued {queued_count} unique articles from {category_kr}")
 
+        # 증분 수집 모드: 현재 페이지의 기사 날짜를 미리 체크하여 페이지네이션 조기 중단
+        if self.target_date and article_links:
+            from datetime import datetime
+            old_article_count = 0
+
+            # 리스트 페이지에 표시된 날짜 텍스트 파싱
+            # 예: <span class="txt-time">11-07 10:30</span>
+            date_texts = response.css('span.txt-time::text').getall()
+
+            for date_text in date_texts:
+                try:
+                    # 형식: "11-07 10:30" (MM-DD HH:MM)
+                    date_part = date_text.strip().split()[0]  # "11-07"
+                    month, day = date_part.split('-')
+
+                    # 연도는 target_date에서 가져옴 (같은 해로 가정)
+                    article_date = datetime(
+                        self.target_date.year,
+                        int(month),
+                        int(day)
+                    ).date()
+
+                    if article_date < self.target_date:
+                        old_article_count += 1
+                except Exception as e:
+                    continue
+
+            # 페이지 내 기사 대부분이 오래되었으면 다음 페이지 요청 중단
+            if old_article_count >= self.STOP_PAGINATION_THRESHOLD:
+                self.logger.warning(
+                    f"[페이지네이션 조기 중단] 현재 페이지에서 {old_article_count}개 오래된 기사 감지 "
+                    f"(임계값: {self.STOP_PAGINATION_THRESHOLD}) → 다음 페이지도 오래된 것으로 추론, 중단"
+                )
+                return  # 페이지네이션 요청하지 않고 종료
+
         # 페이지네이션: 현재 페이지 다음 번호 링크 찾기
         # <strong class="num on">1</strong> 다음의 <a class="num">2</a> 를 찾음
         current_page = response.css('div.paging-type01 strong.num.on::text').get()
@@ -275,6 +408,14 @@ class YonhapSpider(scrapy.Spider):
             category = response.meta['category']
             category_kr = response.meta['category_kr']
 
+        # URL에서 카테고리 힌트 추출
+        url_category, url_confidence = self.extract_category_from_url(response.url)
+        if url_category:
+            self.logger.info(
+                f"[URL 힌트] 카테고리 신뢰도 {url_confidence:.0%}: {url_category} "
+                f"(메타: {category})"
+            )
+
         self.logger.info(f"[STAGE 2] Crawling article: {response.url}")
 
         try:
@@ -294,19 +435,43 @@ class YonhapSpider(scrapy.Spider):
                 try:
                     article_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
 
-                    # 다음날 기사면 크롤링 중단
+                    # 다음날 기사면 전체 크롤링 중단 (Self-Healing 트리거 포인트)
                     if article_date > self.target_date:
-                        self.logger.info(
-                            f"[증분 수집 중단] 기사 날짜 {article_date} > 목표 {self.target_date}"
+                        self.logger.warning(
+                            f"[자동 중단] 다음 날 기사 감지: {article_date} > 목표 {self.target_date} "
+                            f"→ 크롤링 완전 중단 (증분 수집 완료)"
                         )
-                        return  # 이 기사 스킵하고 다음 기사 계속
+                        from scrapy.exceptions import CloseSpider
+                        raise CloseSpider(f"날짜 기반 자동 중단: {article_date} > {self.target_date}")
 
-                    # 이전날 기사면 스킵
+                    # 이전날 기사면 스킵 + 연속 스킵 카운터 증가
                     if article_date < self.target_date:
+                        # 연속 스킵 카운터 증가
+                        if category not in self.consecutive_skips:
+                            self.consecutive_skips[category] = 0
+                        self.consecutive_skips[category] += 1
+
                         self.logger.info(
-                            f"[증분 수집 스킵] 기사 날짜 {article_date} < 목표 {self.target_date}"
+                            f"[증분 수집 스킵] 기사 날짜 {article_date} < 목표 {self.target_date} "
+                            f"(연속 {self.consecutive_skips[category]}개)"
                         )
+
+                        # 25개 연속 스킵 = 1페이지 전체가 오래된 것 → 조기 중단
+                        if self.consecutive_skips[category] >= self.MAX_CONSECUTIVE_SKIPS:
+                            self.logger.warning(
+                                f"[조기 중단] {category}에서 {self.MAX_CONSECUTIVE_SKIPS}개 연속 스킵 "
+                                f"→ 이후 페이지도 오래된 것으로 추론, 크롤링 중단"
+                            )
+                            from scrapy.exceptions import CloseSpider
+                            raise CloseSpider(
+                                f"연속 스킵 기반 조기 중단: {category} {self.consecutive_skips[category]}개"
+                            )
+
                         return  # 오래된 기사 스킵
+
+                    # 날짜 일치 시 카운터 리셋
+                    if category in self.consecutive_skips:
+                        self.consecutive_skips[category] = 0
 
                     self.logger.info(f"[증분 수집 수집] 기사 날짜 {article_date} == 목표 {self.target_date}")
 
@@ -358,18 +523,23 @@ class YonhapSpider(scrapy.Spider):
             decision = validation['decision']
             confidence = validation['confidence']
 
-            if decision == 'reject':
+            if decision == 'reject' or decision == 'uncertain':
+                # UC1 실패: 연속 실패 카운트 증가
+                self.failure_count += 1
+
                 self.logger.warning(
-                    f"[REJECT] {validation['reasoning']} (confidence: {confidence})"
+                    f"[{decision.upper()}] {validation['reasoning']} (confidence: {confidence}, "
+                    f"연속 실패: {self.failure_count}/{self.MAX_FAILURES_BEFORE_UC2})"
                 )
+
+                # UC2 트리거 조건: 연속 3회 실패 & 아직 트리거 안 됨
+                if self.failure_count >= self.MAX_FAILURES_BEFORE_UC2 and not self.uc2_triggered:
+                    self.trigger_uc2_workflow(response.url)
+
                 return  # DB에 저장 안 함!
 
-            if decision == 'uncertain':
-                self.logger.info(f"[UNCERTAIN] UC2 발동 예정 (confidence: {confidence})")
-                # TODO: UC2 발동 (추후 구현)
-                return  # 임시로 uncertain도 reject
-
             # decision == 'pass'
+            self.failure_count = 0  # 성공 시 카운터 리셋
             self.logger.info(f"[PASS] confidence: {confidence}")
 
             # PostgreSQL에 저장 (검증 완료된 데이터만!)
@@ -404,7 +574,9 @@ class YonhapSpider(scrapy.Spider):
                     content_type="news",
                     validation_status="verified",  # UC1 검증 완료
                     validation_method="llm",
-                    llm_reasoning=validation['reasoning']
+                    llm_reasoning=validation['reasoning'],
+                    # Phase 1.2: URL 카테고리 힌트 (NEW!)
+                    url_category_confidence=url_confidence
                 )
                 db.add(crawl_result)
                 db.commit()
