@@ -3,19 +3,28 @@ UC1 Validation Agent - Self-Healing Crawler
 
 목적: 크롤링 결과 품질 검증 및 다음 액션 결정
 
+LLM 사용: 없음 (규칙 기반)
+  - 품질 검증은 규칙 기반 로직으로 수행
+  - LLM 호출 없이 빠른 실행 (~100ms)
+  - UC2/UC3 연계 시에만 LLM 사용
+
 Workflow:
     START
       ↓
     extract_fields (크롤링 결과 읽기)
       ↓
-    calculate_quality (5W1H 점수 계산)
+    calculate_quality (5W1H 점수 계산 - 규칙 기반)
       ↓
     decide_action (next_action 결정)
+      ↓
+    heal_or_discover (UC2/UC3 분기)
+      ├─ UC2 Self-Healing (GPT-4o-mini + Gemini)
+      └─ UC3 New Site Discovery (GPT-4o)
       ↓
     END (save / heal / new_site)
 
 작성일: 2025-11-02
-학습 기반: PRJ_02 (StateGraph), PRJ_04 (MemorySaver)
+수정일: 2025-11-10 (LLM 역할 명확화 + Claude 제거)
 """
 
 from typing import TypedDict, Optional, List, Literal
@@ -26,12 +35,13 @@ from langgraph.graph import StateGraph, START, END
 # Step 1: State 정의 (데이터 저장소)
 # ============================================================
 
-class ValidationState(TypedDict):
+class ValidationState(TypedDict, total=False):
     """
-    UC1 Validation Agent State
+    UC1 Validation Agent State (UC2 자동 연계 지원!)
 
     설명:
         크롤링 결과를 검증하고 다음 액션을 결정하는 State입니다.
+        UC2 자동 복구 실행 시 UC2 관련 필드가 추가됩니다.
 
     필드 설명:
         url: 크롤링한 기사 URL
@@ -48,6 +58,9 @@ class ValidationState(TypedDict):
             - "heal": DOM 변경 → UC2 실행 (기존 사이트)
             - "new_site": 신규 사이트 → UC2 실행 (Selector 생성)
 
+        uc2_triggered: UC2 워크플로우 실행 여부 (NEW!)
+        uc2_success: UC2 합의 성공 여부 (NEW!)
+
     예시:
         {
             "url": "https://www.yna.co.kr/view/AKR...",
@@ -57,7 +70,9 @@ class ValidationState(TypedDict):
             "date": "2025-11-02 14:30:00",
             "quality_score": 100,
             "missing_fields": [],
-            "next_action": "save"
+            "next_action": "save",
+            "uc2_triggered": False,
+            "uc2_success": False
         }
     """
     # 입력 데이터 (크롤링 결과)
@@ -70,9 +85,17 @@ class ValidationState(TypedDict):
     # 검증 결과
     quality_score: int
     missing_fields: List[str]
+    quality_passed: bool  # NEW: Supervisor가 확인하는 플래그
 
     # 다음 액션 결정
-    next_action: Literal["save", "heal", "new_site"]
+    next_action: Literal["save", "heal", "uc3"]  # "new_site" → "uc3"로 변경
+
+    # UC1 전체 검증 결과 (Master State 호환)
+    uc1_validation_result: Optional[dict]  # NEW: Supervisor에게 전달
+
+    # UC2 자동 연계 (DEPRECATED - Supervisor가 라우팅)
+    uc2_triggered: bool
+    uc2_success: bool
 
 
 # ============================================================
@@ -172,46 +195,62 @@ def calculate_quality(state: ValidationState) -> dict:
 
 def decide_action(state: ValidationState) -> dict:
     """
-    Node 3: 다음 액션 결정
+    Node 3: 다음 액션 결정 (Supervisor 복귀용)
 
     목적:
         quality_score와 Selector 존재 여부로 다음 액션을 결정합니다.
+        **중요**: UC2/UC3를 직접 호출하지 않고, next_action만 설정하여 Supervisor로 복귀합니다.
 
     판정 로직:
         1. quality_score >= 80 → "save" (정상, DB 저장)
-        2. quality_score < 80 + Selector 존재 → "heal" (UC2 DOM Recovery)
-        3. quality_score < 80 + Selector 없음 → "new_site" (UC2 신규 생성)
+        2. quality_score < 80 + Selector 존재 → "heal" (UC2 DOM Recovery, Supervisor가 라우팅)
+        3. quality_score < 80 + Selector 없음 → "uc3" (UC3 Discovery, Supervisor가 라우팅)
 
     입력:
         state: ValidationState
 
     출력:
-        {"next_action": "save"}
+        {
+            "next_action": "save" | "heal" | "uc3",
+            "quality_passed": True | False,
+            "uc1_validation_result": {
+                "quality_passed": bool,
+                "quality_score": int,
+                "missing_fields": list,
+                "next_action": str
+            }
+        }
 
-    에러 처리:
-        - DB 조회 실패 시: "new_site" 반환 (안전한 기본값)
-        - 이유: 새로운 Selector 생성이 데이터 손실보다 안전
-
-    설명 포인트:
-        - "Selector 존재 여부는 어떻게 확인?" → DB 조회 (아래 코드 참조)
-        - "heal과 new_site의 차이?" → heal은 복구, new_site는 신규 생성
-
-    Human-in-the-Loop 개입 지점:
-        - 이 Node 실행 전에 멈추고 싶다면?
-          → graph.compile(interrupt_before=["decide_action"])
-        - State 수정 후 계속 진행:
-          → graph.update_state(config, {"quality_score": 85})
-          → graph.stream(None, config)
+    변경 사항 (Multi-Agent Orchestration):
+        - "new_site" → "uc3" (Supervisor가 이해하는 형식)
+        - quality_passed 플래그 추가 (Supervisor 판단용)
+        - uc1_validation_result 추가 (Master State 호환)
+        - UC2/UC3 직접 호출 제거 (Supervisor가 라우팅)
     """
     from src.storage.database import get_db
     from src.storage.models import Selector
+    from loguru import logger
 
     quality_score = state["quality_score"]
+    missing_fields = state.get("missing_fields", [])
     site_name = state["site_name"]
 
     # 1. 품질 검증 통과 (정상)
     if quality_score >= 80:
-        return {"next_action": "save"}
+        logger.info(f"[UC1] ✅ Quality passed (score={quality_score} >= 80) → Supervisor will save")
+
+        validation_result = {
+            "quality_passed": True,
+            "quality_score": quality_score,
+            "missing_fields": missing_fields,
+            "next_action": "save"
+        }
+
+        return {
+            "next_action": "save",
+            "quality_passed": True,
+            "uc1_validation_result": validation_result
+        }
 
     # 2. 품질 실패 → Selector 존재 여부 확인
     try:
@@ -221,48 +260,56 @@ def decide_action(state: ValidationState) -> dict:
 
             if selector:
                 # Selector 존재 → DOM 변경 (UC2 Recovery)
-                return {"next_action": "heal"}
+                logger.info(f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector exists → Supervisor will route to UC2")
+
+                validation_result = {
+                    "quality_passed": False,
+                    "quality_score": quality_score,
+                    "missing_fields": missing_fields,
+                    "next_action": "heal"
+                }
+
+                return {
+                    "next_action": "heal",
+                    "quality_passed": False,
+                    "uc1_validation_result": validation_result
+                }
             else:
-                # Selector 없음 → 신규 사이트 (UC2 New Site)
-                return {"next_action": "new_site"}
+                # Selector 없음 → 신규 사이트 (UC3 Discovery)
+                logger.info(f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector missing → Supervisor will route to UC3")
+
+                validation_result = {
+                    "quality_passed": False,
+                    "quality_score": quality_score,
+                    "missing_fields": missing_fields,
+                    "next_action": "uc3"
+                }
+
+                return {
+                    "next_action": "uc3",
+                    "quality_passed": False,
+                    "uc1_validation_result": validation_result
+                }
         finally:
             db.close()
     except Exception as e:
-        # DB 조회 실패 → 안전한 기본값 (new_site)
-        # 로깅은 프로덕션에서 proper logger로 교체 필요
-        print(f"[WARNING] DB query failed in decide_action: {e}")
-        print(f"[WARNING] Defaulting to 'new_site' for safety")
-        return {"next_action": "new_site"}
+        # DB 조회 실패 → 안전한 기본값 (uc3)
+        logger.error(f"[UC1] DB query failed in decide_action: {e}")
+        logger.warning(f"[UC1] Defaulting to 'uc3' (Discovery) for safety")
 
+        validation_result = {
+            "quality_passed": False,
+            "quality_score": quality_score,
+            "missing_fields": missing_fields,
+            "next_action": "uc3"
+        }
 
-# ============================================================
-# Step 3: Conditional Edge 함수 (분기 결정)
-# ============================================================
+        return {
+            "next_action": "uc3",
+            "quality_passed": False,
+            "uc1_validation_result": validation_result
+        }
 
-def route_by_action(state: ValidationState) -> Literal["save", "heal", "new_site"]:
-    """
-    Conditional Edge: next_action에 따라 분기
-
-    목적:
-        decide_action Node 이후 어디로 갈지 결정합니다.
-
-    반환값:
-        - "save": DB 저장 (정상 종료)
-        - "heal": UC2 DOM Recovery 트리거
-        - "new_site": UC2 New Site 생성 트리거
-
-    설명 포인트:
-        - "왜 별도 함수인가?" → LangGraph의 조건부 분기 패턴 (PRJ_02)
-        - "반환값이 문자열?" → add_conditional_edges의 매핑에서 사용
-
-    Human-in-the-Loop 개입:
-        - 이 시점에 멈추고 싶다면?
-          → graph.compile(interrupt_before=["save_node"]) 등
-        - State 확인:
-          → state = graph.get_state(config)
-          → print(state.values["next_action"])
-    """
-    return state["next_action"]
 
 
 # ============================================================
@@ -271,10 +318,11 @@ def route_by_action(state: ValidationState) -> Literal["save", "heal", "new_site
 
 def create_uc1_validation_agent():
     """
-    UC1 Validation Agent Graph 생성
+    UC1 Validation Agent Graph 생성 (Multi-Agent Orchestration 패턴)
 
     목적:
-        State, Nodes, Edges를 조합하여 완전한 LangGraph를 만듭니다.
+        품질 검증을 수행하고 next_action을 설정하여 Supervisor로 복귀합니다.
+        **중요**: UC2/UC3를 직접 호출하지 않고, Supervisor에게 라우팅을 위임합니다.
 
     반환:
         compiled_graph (실행 가능한 Graph 객체)
@@ -296,38 +344,34 @@ def create_uc1_validation_agent():
         result = graph.invoke(inputs)
 
         # 4. 결과 확인
-        print(result["next_action"])  # "save", "heal", "new_site"
+        print(result["next_action"])  # "save", "heal", "uc3"
+        print(result["quality_passed"])  # True/False
+        print(result["uc1_validation_result"])  # 전체 검증 결과
 
-    설명 포인트:
-        - "StateGraph(ValidationState)의 의미?" → 이 State를 사용하는 Graph
-        - "add_node의 역할?" → Node 이름과 함수 연결
-        - "add_edge vs add_conditional_edges?"
-          → add_edge: 무조건 연결
-          → add_conditional_edges: 조건부 분기
+    Multi-Agent Orchestration 패턴:
+        - Graph 구조: START → extract → calculate → decide → END
+        - decide_action이 next_action 설정
+        - Supervisor가 next_action 읽고 UC2/UC3 라우팅
+        - LangSmith Trace에서 Supervisor → UC1 → Supervisor → UC2 경로 확인 가능
+
+    변경 사항:
+        - heal_or_discover 노드 제거 (더 이상 불필요)
+        - Conditional Edge 제거 (단순한 선형 흐름)
+        - decide_action → END 직행 (Supervisor 복귀)
     """
     # Graph 빌더 생성
     builder = StateGraph(ValidationState)
 
-    # Nodes 추가
+    # Nodes 추가 (단순화된 구조)
     builder.add_node("extract_fields", extract_fields)
     builder.add_node("calculate_quality", calculate_quality)
     builder.add_node("decide_action", decide_action)
 
-    # Edges 연결
+    # Edges 연결 (선형 흐름)
     builder.add_edge(START, "extract_fields")
     builder.add_edge("extract_fields", "calculate_quality")
     builder.add_edge("calculate_quality", "decide_action")
-
-    # Conditional Edge (3-way 분기)
-    builder.add_conditional_edges(
-        "decide_action",  # 이 Node 이후에
-        route_by_action,  # 이 함수로 결정
-        {
-            "save": END,       # "save" → 종료
-            "heal": END,       # "heal" → 종료 (실제론 UC2로 연결)
-            "new_site": END    # "new_site" → 종료 (실제론 UC2로 연결)
-        }
-    )
+    builder.add_edge("decide_action", END)  # Supervisor로 즉시 복귀
 
     # Graph 컴파일
     return builder.compile()

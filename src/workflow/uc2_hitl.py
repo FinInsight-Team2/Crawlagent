@@ -200,6 +200,155 @@ Return ONLY a JSON object with this structure:
 
 
 # ============================================================================
+# Helper Functions for Quality Assessment (NEW! - Sprint 1)
+# ============================================================================
+
+def calculate_extraction_quality(extracted_data: dict, extraction_success: dict) -> float:
+    """
+    추출된 데이터의 실제 품질을 0.0~1.0 점수로 계산
+
+    목적:
+        단순 "성공/실패"가 아니라 "얼마나 좋은 데이터인지" 정량적으로 평가
+
+    계산 방법:
+        - title_quality * 0.3: 제목 품질 (10자 이상이면 1.0)
+        - body_quality * 0.5: 본문 품질 (500자 이상이면 1.0, 100~500자면 0.6)
+        - date_quality * 0.2: 날짜 품질 (추출 성공하면 1.0)
+
+    Args:
+        extracted_data: {"title": "...", "body": "...", "date": "..."}
+        extraction_success: {"title": True, "body": True, "date": False}
+
+    Returns:
+        float: 0.0 ~ 1.0 (0.8 이상이면 고품질)
+
+    Example:
+        >>> extracted = {"title": "삼성전자 주가 급등", "body": "..."*600, "date": "2025-11-09"}
+        >>> success = {"title": True, "body": True, "date": True}
+        >>> calculate_extraction_quality(extracted, success)
+        1.0  # 모든 필드가 고품질
+
+        >>> extracted_poor = {"title": "짧음", "body": "너무 짧은 본문", "date": None}
+        >>> success_poor = {"title": True, "body": True, "date": False}
+        >>> calculate_extraction_quality(extracted_poor, success_poor)
+        0.38  # 품질이 낮음
+    """
+    # 1. Title 품질 (0.0 ~ 1.0)
+    title = extracted_data.get("title", "")
+    title_success = extraction_success.get("title", False)
+
+    if not title_success or not title:
+        title_quality = 0.0
+    elif len(title) >= 10:
+        title_quality = 1.0  # 충분한 길이
+    elif len(title) >= 5:
+        title_quality = 0.7  # 짧지만 있음
+    else:
+        title_quality = 0.3  # 너무 짧음
+
+    # 2. Body 품질 (0.0 ~ 1.0)
+    body = extracted_data.get("body", "")
+    body_success = extraction_success.get("body", False)
+
+    if not body_success or not body:
+        body_quality = 0.0
+    elif len(body) >= 500:
+        body_quality = 1.0  # 충분한 본문 (5W1H 기준 500자 이상)
+    elif len(body) >= 200:
+        body_quality = 0.7  # 중간 길이
+    elif len(body) >= 100:
+        body_quality = 0.4  # 짧은 본문
+    else:
+        body_quality = 0.1  # 너무 짧음 (거의 실패)
+
+    # 3. Date 품질 (0.0 ~ 1.0)
+    date = extracted_data.get("date", "")
+    date_success = extraction_success.get("date", False)
+
+    if not date_success or not date:
+        date_quality = 0.0
+    else:
+        # 날짜 형식 검증 (간단한 휴리스틱)
+        # "2025-11-09", "2025.11.09", "11/09/2025" 등
+        import re
+        if re.search(r'\d{4}', date) and re.search(r'\d{1,2}', date):
+            date_quality = 1.0  # 연도와 숫자가 포함되어 있으면 OK
+        else:
+            date_quality = 0.5  # 날짜 같지만 확실하지 않음
+
+    # 4. 가중치 합산
+    extraction_quality = (
+        title_quality * 0.3 +
+        body_quality * 0.5 +
+        date_quality * 0.2
+    )
+
+    logger.debug(
+        f"[Extraction Quality] title={title_quality:.2f}, "
+        f"body={body_quality:.2f}, date={date_quality:.2f} "
+        f"→ total={extraction_quality:.2f}"
+    )
+
+    return round(extraction_quality, 2)
+
+
+def calculate_consensus_score(
+    gpt_confidence: float,
+    gemini_confidence: float,
+    extraction_quality: float
+) -> float:
+    """
+    3가지 요소를 가중치 합산하여 최종 합의 점수 계산
+
+    목적:
+        GPT 제안 품질 + Gemini 검증 품질 + 실제 추출 결과를 모두 고려하여
+        종합적인 합의 점수를 계산
+
+    가중치:
+        - gpt_confidence: 30% (GPT가 제안에 대해 얼마나 확신하는지)
+        - gemini_confidence: 30% (Gemini가 검증에 대해 얼마나 확신하는지)
+        - extraction_quality: 40% (실제 추출 결과가 얼마나 좋은지)
+
+    판단 기준:
+        - >= 0.8: 자동 승인 (High confidence)
+        - >= 0.6: 조건부 승인 (Medium confidence, 경고 로그)
+        - < 0.6: Human Review 필요 (Low confidence)
+
+    Args:
+        gpt_confidence: 0.0 ~ 1.0 (GPT 제안 신뢰도)
+        gemini_confidence: 0.0 ~ 1.0 (Gemini 검증 신뢰도)
+        extraction_quality: 0.0 ~ 1.0 (실제 추출 품질)
+
+    Returns:
+        float: 0.0 ~ 1.0 (최종 합의 점수)
+
+    Example:
+        >>> calculate_consensus_score(0.95, 0.90, 1.0)
+        0.95  # 자동 승인 (모든 지표가 높음)
+
+        >>> calculate_consensus_score(0.80, 0.70, 0.60)
+        0.69  # 조건부 승인 (중간 품질)
+
+        >>> calculate_consensus_score(0.60, 0.50, 0.30)
+        0.43  # Human Review (품질 낮음)
+    """
+    consensus_score = (
+        gpt_confidence * 0.3 +
+        gemini_confidence * 0.3 +
+        extraction_quality * 0.4
+    )
+
+    logger.info(
+        f"[Consensus Score] GPT={gpt_confidence:.2f}(30%) + "
+        f"Gemini={gemini_confidence:.2f}(30%) + "
+        f"Extraction={extraction_quality:.2f}(40%) "
+        f"= {consensus_score:.2f}"
+    )
+
+    return round(consensus_score, 2)
+
+
+# ============================================================================
 # Gemini Validator Node
 # ============================================================================
 
@@ -308,8 +457,35 @@ Criteria:
         validation = json.loads(response.text)
         logger.info(f"[Gemini Validate Node] Validation: {validation.get('is_valid')} (confidence: {validation.get('confidence')})")
 
-        # 4. 합의 여부 결정
-        consensus_reached = validation.get("is_valid", False)
+        # 4. 합의 여부 결정 (NEW! Weighted Consensus Algorithm - Sprint 1)
+        # 기존: validation.get("is_valid") 단순 사용
+        # 개선: GPT confidence + Gemini confidence + Extraction quality 종합 평가
+
+        # 4-1. 추출 품질 계산
+        extraction_quality = calculate_extraction_quality(extracted_data, extraction_success)
+
+        # 4-2. 합의 점수 계산 (0.0 ~ 1.0)
+        gpt_confidence = gpt_proposal.get("confidence", 0.0)
+        gemini_confidence = validation.get("confidence", 0.0)
+        consensus_score = calculate_consensus_score(
+            gpt_confidence,
+            gemini_confidence,
+            extraction_quality
+        )
+
+        # 4-3. 합의 여부 판단 (3-tier system)
+        if consensus_score >= 0.8:
+            consensus_reached = True
+            logger.info(f"[Consensus] ✅ AUTO-APPROVED (score={consensus_score:.2f} >= 0.8)")
+        elif consensus_score >= 0.6:
+            consensus_reached = True
+            logger.warning(
+                f"[Consensus] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f} >= 0.6) "
+                f"- Medium confidence, monitoring recommended"
+            )
+        else:
+            consensus_reached = False
+            logger.warning(f"[Consensus] ❌ REJECTED (score={consensus_score:.2f} < 0.6) - Human Review needed")
 
         # 5. next_action 결정
         if consensus_reached:
@@ -346,31 +522,34 @@ Criteria:
 
 def human_review_node(state: HITLState) -> HITLState:
     """
-    Human-in-the-Loop Node
+    완전 자동화 Node (Human Review 제거)
 
-    3회 재시도 후에도 합의 실패 시, 사람의 최종 승인을 받는 Node
+    3회 재시도 후에도 합의 실패 시, **이전 Selector 유지** (사람 개입 X)
 
     동작:
-    1. GPT 제안과 Gemini 검증 결과를 사람에게 제시
-    2. 사람이 승인/거부/수정 선택
-    3. 승인 시 → final_selectors 저장
-    4. 거부 시 → error_message 설정
+    1. 합의 실패 기록 (DecisionLog)
+    2. 이전 Selector 유지 (DB 업데이트 안 함)
+    3. 워크플로우 종료 (next_action = "end")
+
+    PoC 핵심: 완전 자동화 - Agent가 자율적으로 결정, 사람 개입 없음
     """
-    logger.info(f"[Human Review Node] HITL triggered for {state['url']}")
+    logger.warning(f"[Auto-Decision Node] 3회 재시도 실패 → 이전 Selector 유지 (URL: {state['url']})")
 
-    # TODO: Gradio UI 통합 시 구현
-    # 현재는 자동 승인 (임시)
     gpt_proposal = state.get("gpt_proposal")
+    gemini_validation = state.get("gemini_validation")
 
-    logger.warning(
-        f"[Human Review] Auto-approving proposal (TODO: implement UI)\n"
-        f"Proposal: {gpt_proposal}"
+    # Consensus 실패 정보 기록
+    logger.info(
+        f"[Auto-Decision] GPT proposal: {gpt_proposal}\n"
+        f"[Auto-Decision] Gemini validation: {gemini_validation}\n"
+        f"[Auto-Decision] Decision: 이전 Selector 유지 (변경 없음)"
     )
 
     return {
         **state,
-        "consensus_reached": True,
-        "final_selectors": gpt_proposal,
+        "consensus_reached": False,  # 합의 실패 명시
+        "final_selectors": None,  # Selector 업데이트 안 함
+        "error_message": "3회 재시도 실패 - 이전 Selector 유지",
         "next_action": "end"
     }
 

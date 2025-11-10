@@ -3,12 +3,14 @@ name = "crawlagent"
 version = "1.0.0"
 description = "LangGraph Multi-Agent Self-Healing Web Crawler"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<4.0"
 dependencies = [
     "scrapy>=2.11.0",
     "trafilatura>=1.12.0",
     "langgraph>=0.2.0",
     "langchain-openai>=0.2.0",
+    "langchain-anthropic>=1.0.2",
+    "langchain-community>=0.2.0",
     "google-generativeai>=0.8.0",
     "sqlalchemy>=2.0.0",
     "psycopg2-binary>=2.9.9",
@@ -27,6 +29,8 @@ dependencies = [
     "kaleido>=0.2.1",
     "matplotlib (>=3.5.0)",
     "pillow (>=9.0,<12.0)",
+    "tavily-python>=0.5.0",
+    "firecrawl-py>=1.0.0",
 ]
 
 [build-system]
@@ -45,6 +49,10 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+# [dependency-groups]
+# LangGraph CLI는 LangGraph Studio Desktop용이므로 제거
+# LangSmith를 사용하므로 불필요함
 
 [dependency-groups]
 dev = [

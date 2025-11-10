@@ -1,0 +1,1596 @@
+"""
+UC3 New Site Auto-Discovery Agent - Self-Healing Crawler
+
+목적: 신규 뉴스 사이트 자동 분석 및 CSS Selector 생성
+
+LLM 사용: GPT-4o (Discoverer)
+  - 역할: 신규 사이트 DOM 분석 및 Selector 생성
+  - Confidence: 0.0 ~ 1.0
+
+Workflow:
+    START
+      ↓
+    fetch_html (HTML 다운로드)
+      ↓
+    preprocess_html (토큰 축소 50-80%)
+      ↓
+    gpt_discover (GPT-4o - Selector 생성)
+      ↓
+    validate_selectors (샘플 URL로 검증)
+      ↓
+    check_quality (품질 게이트)
+      ↓
+    save_selectors (DB 저장) OR human_review
+      ↓
+    END
+
+작성일: 2025-11-09
+수정일: 2025-11-10 (Claude → GPT-4o 전환)
+"""
+
+import os
+import re
+import json
+import requests
+from typing import TypedDict, Optional, List, Literal
+from urllib.parse import urlparse
+from bs4 import BeautifulSoup
+from pydantic import BaseModel, Field
+from langgraph.graph import StateGraph, START, END
+from loguru import logger
+from datetime import datetime
+from functools import partial
+
+# LangChain imports for Tools and Agents
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.tools import tool
+from langchain_core.prompts import ChatPromptTemplate
+
+# Firecrawl
+try:
+    from firecrawl import FirecrawlApp
+except ImportError:
+    logger.warning("firecrawl-py not installed. UC3 Firecrawl tool will be disabled.")
+    FirecrawlApp = None
+
+from src.storage.database import get_db
+from src.storage.models import Selector
+
+
+# ============================================================
+# Step 1: Pydantic Models (GPT-4o Structured Output)
+# ============================================================
+
+class SiteStructureAnalysis(BaseModel):
+    """
+    GPT-4o가 분석한 뉴스 사이트 구조 정보
+    """
+    site_name: str = Field(description="사이트 이름 (도메인 기반)")
+    site_type: Literal["ssr", "spa"] = Field(description="서버 사이드 렌더링(SSR) 또는 SPA")
+    title_selector: str = Field(description="기사 제목 CSS Selector")
+    body_selector: str = Field(description="기사 본문 CSS Selector")
+    date_selector: str = Field(description="기사 날짜 CSS Selector")
+    author_selector: Optional[str] = Field(default=None, description="저자 CSS Selector (선택)")
+    category_selector: Optional[str] = Field(default=None, description="카테고리 CSS Selector (선택)")
+    confidence: float = Field(description="Selector 정확도 (0.0 ~ 1.0)")
+    reasoning: str = Field(description="Selector 선택 이유")
+
+
+# ============================================================
+# Step 2: State 정의
+# ============================================================
+
+class UC3State(TypedDict, total=False):
+    """
+    UC3 New Site Auto-Discovery State
+
+    필드 설명:
+        url: 분석할 뉴스 기사 URL (1개)
+        site_name: 사이트 이름 (자동 추출)
+        sample_urls: 검증용 샘플 URL 리스트 (3-5개, 선택)
+
+        raw_html: 다운로드한 원본 HTML
+        preprocessed_html: 전처리된 HTML (토큰 축소)
+
+        gpt_analysis: GPT-4o의 Selector 분석 결과
+        validation_report: Selector 검증 결과
+        selectors_valid: Selector가 유효한지 여부
+
+        confidence: GPT-4o 신뢰도 점수 (0.0 ~ 1.0)
+        success_rate: 검증 성공률 (0.0 ~ 1.0)
+
+        next_action: 다음 액션
+            - "save": Selector 저장 → 크롤링 시작
+            - "refine": UC2로 Selector 개선
+            - "human_review": 수동 검토 필요
+
+    예시:
+        {
+            "url": "https://www.chosun.com/economy/2025/11/09/...",
+            "site_name": "chosun",
+            "sample_urls": [],
+            "gpt_analysis": {...},
+            "confidence": 0.85,
+            "success_rate": 0.90,
+            "next_action": "save"
+        }
+    """
+    # 입력 데이터
+    url: str
+    site_name: str
+    sample_urls: List[str]
+
+    # HTML 데이터
+    raw_html: str
+    preprocessed_html: str
+
+    # 분석 결과
+    gpt_analysis: dict
+    validation_report: dict
+    selectors_valid: bool
+
+    # 품질 지표
+    confidence: float
+    success_rate: float
+
+    # 다음 액션
+    next_action: Literal["save", "refine", "human_review"]
+
+    # === NEW: 3-Tool Results ===
+    tavily_results: dict
+    """
+    Tavily Web Search Tool 결과
+    {
+        "success": True/False,
+        "results": [...],
+        "query": "...",
+        "error": "..." (if failed)
+    }
+    """
+
+    firecrawl_results: dict
+    """
+    Firecrawl HTML Preprocessing Tool 결과
+    {
+        "success": True/False,
+        "html": "...",
+        "markdown": "...",
+        "metadata": {...},
+        "original_tokens": 50000,
+        "reduced_tokens": 5000
+    }
+    """
+
+    beautifulsoup_analysis: dict
+    """
+    Beautiful Soup DOM Analyzer Tool 결과
+    {
+        "success": True/False,
+        "analysis": {
+            "title_candidates": [...],
+            "body_candidates": [...],
+            "date_candidates": [...]
+        }
+    }
+    """
+
+    # === NEW: 2-Agent Consensus System ===
+    gpt_proposal: dict
+    """
+    GPT-4o Agent (Proposer) 제안
+    {
+        "selectors": {
+            "title": {"selector": "...", "confidence": 0.95, "reasoning": "..."},
+            "body": {"selector": "...", "confidence": 0.88, "reasoning": "..."},
+            "date": {"selector": "...", "confidence": 0.92, "reasoning": "..."}
+        },
+        "overall_confidence": 0.92
+    }
+    """
+
+    gpt_confidence: float
+    """GPT-4o의 전체 신뢰도 (0.0-1.0)"""
+
+    gemini_validation: dict
+    """
+    Gemini Agent (Validator) 검증 결과
+    {
+        "best_selectors": {
+            "title": "...",
+            "body": "...",
+            "date": "..."
+        },
+        "validation_details": {
+            "title": {"valid": True, "confidence": 0.96, "text": "..."},
+            "body": {"valid": True, "confidence": 0.91, "text": "..."},
+            "date": {"valid": True, "confidence": 1.0, "text": "..."}
+        },
+        "overall_confidence": 0.95
+    }
+    """
+
+    gemini_confidence: float
+    """Gemini의 전체 신뢰도 (0.0-1.0)"""
+
+    consensus_score: float
+    """
+    가중 합의 점수 (0.0-1.0)
+    Formula: 0.3 × GPT + 0.3 × Gemini + 0.4 × Extraction Quality
+    """
+
+    consensus_reached: bool
+    """합의 도달 여부 (consensus_score >= 0.7)"""
+
+    extraction_quality: float
+    """추출 품질 점수 (0.0-1.0)"""
+
+    discovered_selectors: dict
+    """
+    최종 발견된 셀렉터 (consensus_reached=True일 때만)
+    {
+        "title": "...",
+        "body": "...",
+        "date": "..."
+    }
+    """
+
+
+# ============================================================
+# Step 3: Helper Functions
+# ============================================================
+
+def extract_site_name(url: str) -> str:
+    """
+    URL에서 사이트 이름 추출
+
+    예시:
+        "https://www.chosun.com/..." → "chosun"
+        "https://news.naver.com/..." → "naver"
+    """
+    parsed = urlparse(url)
+    domain = parsed.netloc
+
+    # www. 제거
+    domain = domain.replace("www.", "")
+
+    # 첫 번째 도메인 이름 추출
+    site_name = domain.split(".")[0]
+
+    return site_name
+
+
+def preprocess_html(raw_html: str) -> str:
+    """
+    HTML 전처리 (토큰 축소 50-80%)
+
+    제거:
+        - script, style, svg, iframe, noscript
+        - 주석 (comments)
+        - 긴 텍스트 축약 (100자 이상 → 50자 + "...")
+
+    유지:
+        - main, article, header, section
+        - h1~h6, p, time, span
+        - class, id 속성
+    """
+    soup = BeautifulSoup(raw_html, 'html.parser')
+
+    # 1. 불필요한 태그 제거
+    for tag in soup(['script', 'style', 'svg', 'iframe', 'noscript', 'footer', 'nav']):
+        tag.decompose()
+
+    # 2. 주석 제거
+    for comment in soup.find_all(string=lambda text: isinstance(text, str) and text.strip().startswith('<!--')):
+        comment.extract()
+
+    # 3. main/article 영역만 추출 (있으면)
+    main_content = (
+        soup.find('main') or
+        soup.find('article') or
+        soup.find('div', class_=re.compile(r'(content|article|post|entry)', re.I))
+    )
+
+    if main_content:
+        result = str(main_content)
+    else:
+        result = str(soup)
+
+    # 4. 긴 텍스트 축약 (선택)
+    # (GPT-4o는 128K 토큰까지 지원)
+
+    logger.info(f"[UC3] HTML 전처리 완료: {len(raw_html)} chars → {len(result)} chars ({len(result)/len(raw_html)*100:.1f}%)")
+
+    return result
+
+
+# ============================================================
+# Step 4: Node 함수 정의
+# ============================================================
+
+def fetch_html_node(state: UC3State) -> dict:
+    """
+    Node 1: HTML 다운로드
+
+    목적:
+        입력받은 URL의 HTML을 다운로드합니다.
+
+    입력:
+        state["url"]: 뉴스 기사 URL
+
+    출력:
+        state["raw_html"]: 다운로드한 HTML
+        state["site_name"]: 추출한 사이트 이름
+    """
+    url = state["url"]
+
+    logger.info(f"[UC3] HTML 다운로드 시작: {url}")
+
+    try:
+        response = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        })
+        response.raise_for_status()
+
+        raw_html = response.text
+        site_name = extract_site_name(url)
+
+        logger.info(f"[UC3] HTML 다운로드 완료: {len(raw_html)} chars, site={site_name}")
+
+        return {
+            "raw_html": raw_html,
+            "site_name": site_name
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3] HTML 다운로드 실패: {e}")
+        return {
+            "raw_html": "",
+            "site_name": extract_site_name(url),
+            "next_action": "human_review"
+        }
+
+
+def preprocess_html_node(state: UC3State) -> dict:
+    """
+    Node 2: HTML 전처리
+
+    목적:
+        토큰 수를 50-80% 축소하여 GPT-4o 입력 최적화
+
+    입력:
+        state["raw_html"]: 원본 HTML
+
+    출력:
+        state["preprocessed_html"]: 전처리된 HTML
+    """
+    raw_html = state.get("raw_html", "")
+
+    if not raw_html:
+        logger.warning("[UC3] raw_html이 비어있습니다")
+        return {"preprocessed_html": "", "next_action": "human_review"}
+
+    preprocessed = preprocess_html(raw_html)
+
+    return {"preprocessed_html": preprocessed}
+
+
+def gpt_discover_node(state: UC3State) -> dict:
+    """
+    Node 3: GPT-4o로 Selector 분석
+
+    목적:
+        전처리된 HTML을 GPT-4o에게 전달하고
+        뉴스 기사 구조를 분석하여 CSS Selector를 생성합니다.
+
+    입력:
+        state["preprocessed_html"]: 전처리된 HTML
+        state["url"]: 원본 URL
+        state["site_name"]: 사이트 이름
+
+    출력:
+        state["gpt_analysis"]: GPT-4o 분석 결과 (dict)
+        state["confidence"]: GPT-4o 신뢰도
+    """
+    preprocessed_html = state.get("preprocessed_html", "")
+    url = state.get("url", "")
+    site_name = state.get("site_name", "")
+
+    if not preprocessed_html:
+        logger.warning("[UC3] preprocessed_html이 비어있습니다")
+        return {
+            "gpt_analysis": {},
+            "confidence": 0.0,
+            "next_action": "human_review"
+        }
+
+    logger.info(f"[UC3] GPT-4o 분석 시작: site={site_name}")
+
+    # GPT-4o 초기화
+    from langchain_openai import ChatOpenAI
+
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0,
+        api_key=os.getenv("OPENAI_API_KEY")
+    )
+
+    structured_llm = llm.with_structured_output(SiteStructureAnalysis)
+
+    # 프롬프트 생성
+    prompt = f"""
+Analyze this Korean news article HTML and generate CSS selectors.
+
+Site URL: {url}
+Site Name: {site_name}
+
+HTML (preprocessed):
+{preprocessed_html[:10000]}
+
+Tasks:
+1. Identify the article title CSS selector
+   - Usually: h1, h2, meta[property="og:title"], or specific class
+   - Prioritize semantic HTML tags
+   - Avoid id-based selectors (prefer class or tag)
+
+2. Identify the article body CSS selector
+   - Usually: article > p, div.content p, or main p
+   - Should extract main text content (multiple paragraphs)
+   - Avoid navigation, ads, related articles
+
+3. Identify the publication date selector
+   - Usually: time[datetime], meta[property="article:published_time"], or specific class
+   - Date format: ISO 8601 or Korean format (YYYY-MM-DD HH:MM:SS)
+
+4. Determine if this is SSR (Server-Side Rendering) or SPA (Single Page App)
+   - SSR: Full HTML content visible
+   - SPA: Minimal HTML, client-side rendering (React, Vue, etc.)
+
+5. Provide confidence score (0.0 - 1.0)
+   - 0.9-1.0: Very confident, semantic HTML, clear structure
+   - 0.7-0.9: Confident, good structure
+   - 0.5-0.7: Uncertain, multiple candidates
+   - <0.5: Low confidence, unclear structure
+
+Guidelines:
+- Prefer stable selectors (avoid auto-generated class names like 'css-1a2b3c')
+- Use descendant combinators (e.g., 'article > h1') for precision
+- Test selectors mentally against the HTML structure
+- Provide clear reasoning for your choices
+
+Return structured output with:
+- site_name
+- site_type ('ssr' or 'spa')
+- title_selector
+- body_selector
+- date_selector
+- confidence (0.0 - 1.0)
+- reasoning (why you chose these selectors)
+"""
+
+    try:
+        result: SiteStructureAnalysis = structured_llm.invoke(prompt)
+
+        logger.info(f"[UC3] GPT-4o 분석 완료:")
+        logger.info(f"  Title Selector: {result.title_selector}")
+        logger.info(f"  Body Selector: {result.body_selector}")
+        logger.info(f"  Date Selector: {result.date_selector}")
+        logger.info(f"  Confidence: {result.confidence:.2f}")
+        logger.info(f"  Reasoning: {result.reasoning[:100]}...")
+
+        return {
+            "gpt_analysis": result.dict(),
+            "confidence": result.confidence
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3] GPT-4o 분석 실패: {e}")
+        return {
+            "gpt_analysis": {},
+            "confidence": 0.0,
+            "next_action": "human_review"
+        }
+
+
+def validate_selectors_node(state: UC3State) -> dict:
+    """
+    Node 4: Selector 검증
+
+    목적:
+        생성된 Selector를 원본 HTML에 적용하여 검증합니다.
+        (샘플 URL이 없으면 원본 URL만 검증)
+
+    입력:
+        state["gpt_analysis"]: GPT-4o 분석 결과
+        state["raw_html"]: 원본 HTML
+        state["sample_urls"]: 샘플 URL 리스트 (선택)
+
+    출력:
+        state["validation_report"]: 검증 결과
+        state["selectors_valid"]: 검증 성공 여부
+        state["success_rate"]: 검증 성공률 (0.0 ~ 1.0)
+    """
+    gpt_analysis = state.get("gpt_analysis", {})
+    raw_html = state.get("raw_html", "")
+
+    if not gpt_analysis or not raw_html:
+        logger.warning("[UC3] gpt_analysis 또는 raw_html이 비어있습니다")
+        return {
+            "validation_report": {},
+            "selectors_valid": False,
+            "success_rate": 0.0,
+            "next_action": "human_review"
+        }
+
+    title_selector = gpt_analysis.get("title_selector", "")
+    body_selector = gpt_analysis.get("body_selector", "")
+    date_selector = gpt_analysis.get("date_selector", "")
+
+    logger.info(f"[UC3] Selector 검증 시작")
+
+    soup = BeautifulSoup(raw_html, 'html.parser')
+
+    # Title 검증
+    title_elements = soup.select(title_selector)
+    title_valid = False
+    title_text = ""
+
+    if title_elements:
+        title_text = title_elements[0].get_text(strip=True)
+        if len(title_text) >= 10:
+            title_valid = True
+
+    # Body 검증
+    body_elements = soup.select(body_selector)
+    body_valid = False
+    body_text = ""
+
+    if body_elements:
+        # 모든 <p> 태그 텍스트 합치기
+        body_text = " ".join([el.get_text(strip=True) for el in body_elements])
+        if len(body_text) >= 500:
+            body_valid = True
+
+    # Date 검증
+    date_elements = soup.select(date_selector)
+    date_valid = False
+    date_text = ""
+
+    if date_elements:
+        date_text = date_elements[0].get_text(strip=True) or date_elements[0].get("datetime", "")
+        # 날짜 패턴 확인 (YYYY-MM-DD 또는 YYYY.MM.DD 또는 YYYY년MM월DD일)
+        if re.search(r'\d{4}[-./년]\d{1,2}[-./월]\d{1,2}', date_text):
+            date_valid = True
+
+    # 검증 결과 계산
+    total_fields = 3
+    valid_fields = sum([title_valid, body_valid, date_valid])
+    success_rate = valid_fields / total_fields
+
+    logger.info(f"[UC3] 검증 결과:")
+    logger.info(f"  Title: {'✅' if title_valid else '❌'} ({len(title_text)} chars)")
+    logger.info(f"  Body: {'✅' if body_valid else '❌'} ({len(body_text)} chars)")
+    logger.info(f"  Date: {'✅' if date_valid else '❌'} ({date_text})")
+    logger.info(f"  Success Rate: {success_rate:.2%} ({valid_fields}/{total_fields})")
+
+    validation_report = {
+        "title_valid": title_valid,
+        "title_text": title_text[:100],
+        "body_valid": body_valid,
+        "body_length": len(body_text),
+        "date_valid": date_valid,
+        "date_text": date_text,
+        "success_rate": success_rate
+    }
+
+    selectors_valid = success_rate >= 0.8  # 80% 이상이면 유효
+
+    return {
+        "validation_report": validation_report,
+        "selectors_valid": selectors_valid,
+        "success_rate": success_rate
+    }
+
+
+def check_quality_node(state: UC3State) -> dict:
+    """
+    Node 5: 품질 게이트
+
+    목적:
+        GPT-4o 신뢰도와 검증 성공률을 종합하여 다음 액션 결정
+
+    입력:
+        state["confidence"]: GPT-4o 신뢰도
+        state["success_rate"]: 검증 성공률
+        state["selectors_valid"]: 검증 성공 여부
+
+    출력:
+        state["next_action"]: 다음 액션
+            - "save": 성공률 ≥ 80% AND 신뢰도 ≥ 0.7 → DB 저장
+            - "refine": 60% ≤ 성공률 < 80% → UC2 개선
+            - "human_review": 성공률 < 60% → 수동 검토
+    """
+    confidence = state.get("confidence", 0.0)
+    success_rate = state.get("success_rate", 0.0)
+    selectors_valid = state.get("selectors_valid", False)
+
+    logger.info(f"[UC3] 품질 게이트:")
+    logger.info(f"  GPT-4o Confidence: {confidence:.2f}")
+    logger.info(f"  Validation Success Rate: {success_rate:.2%}")
+    logger.info(f"  Selectors Valid: {selectors_valid}")
+
+    # 품질 게이트 로직
+    if success_rate >= 0.8 and confidence >= 0.7:
+        next_action = "save"
+        logger.info(f"[UC3] ✅ 품질 기준 충족 → Selector 저장")
+    elif success_rate >= 0.6:
+        next_action = "refine"
+        logger.warning(f"[UC3] ⚠️ 품질 미달 → UC2로 개선 필요")
+    else:
+        next_action = "human_review"
+        logger.warning(f"[UC3] ❌ 품질 매우 낮음 → Human Review 필요")
+
+    return {"next_action": next_action}
+
+
+def save_selectors_node(state: UC3State) -> dict:
+    """
+    Node 6: Selector 저장
+
+    목적:
+        생성된 Selector를 DB에 저장합니다.
+
+    입력:
+        state["site_name"]: 사이트 이름
+        state["discovered_selectors"]: Gemini 검증에서 합의된 최종 셀렉터
+
+    출력:
+        (DB 업데이트)
+    """
+    site_name = state.get("site_name", "")
+    discovered_selectors = state.get("discovered_selectors", {})
+
+    if not site_name or not discovered_selectors:
+        logger.error(f"[UC3] site_name 또는 discovered_selectors가 비어있습니다: site={site_name}, selectors={discovered_selectors}")
+        return {}
+
+    db = next(get_db())
+
+    try:
+        # 기존 Selector 확인
+        existing = db.query(Selector).filter_by(site_name=site_name).first()
+
+        if existing:
+            # 업데이트
+            existing.title_selector = discovered_selectors.get("title", "")
+            existing.body_selector = discovered_selectors.get("body", "")
+            existing.date_selector = discovered_selectors.get("date", "")
+            existing.site_type = "ssr"  # default
+
+            logger.info(f"[UC3] Selector 업데이트: site={site_name}")
+        else:
+            # 신규 생성
+            selector = Selector(
+                site_name=site_name,
+                title_selector=discovered_selectors.get("title", ""),
+                body_selector=discovered_selectors.get("body", ""),
+                date_selector=discovered_selectors.get("date", ""),
+                site_type="ssr"  # default
+            )
+            db.add(selector)
+
+            logger.info(f"[UC3] Selector 생성: site={site_name}, selectors={discovered_selectors}")
+
+        db.commit()
+        logger.info(f"[UC3] ✅ Selector 저장 완료!")
+
+        return {}
+
+    except Exception as e:
+        logger.error(f"[UC3] Selector 저장 실패: {e}")
+        db.rollback()
+        return {}
+
+    finally:
+        db.close()
+
+
+# ============================================================
+# Step 4.5: NEW - 3-Tool + 2-Agent System for UC3
+# ============================================================
+
+# --- Helper Function: CSS Selector Generation ---
+
+def generate_css_selector(tag) -> str:
+    """
+    BeautifulSoup tag로부터 고유 CSS 셀렉터 생성
+
+    우선순위:
+        1. ID가 있으면 #id 사용
+        2. Class가 있으면 tag.class1.class2 사용
+        3. 부모 기반 선택자 사용 (parent > tag:nth-of-type(n))
+    """
+    # ID 있으면 우선
+    if tag.get('id'):
+        return f"#{tag['id']}"
+
+    # Class 조합 (최대 2개까지)
+    classes = tag.get('class', [])
+    if classes:
+        class_selector = '.' + '.'.join(classes[:2])
+        return f"{tag.name}{class_selector}"
+
+    # 부모 기반 선택자
+    parent = tag.parent
+    if parent and parent.name != '[document]':
+        try:
+            parent_selector = generate_css_selector(parent)
+            siblings = list(parent.find_all(tag.name, recursive=False))
+            if len(siblings) > 1:
+                idx = siblings.index(tag) + 1
+                return f"{parent_selector} > {tag.name}:nth-of-type({idx})"
+            else:
+                return f"{parent_selector} > {tag.name}"
+        except:
+            pass
+
+    return tag.name
+
+
+# --- Tool 1: Tavily Web Search ---
+
+def tavily_search_node(state: UC3State) -> dict:
+    """
+    Tool 1: Tavily Web Search - 유사 사이트의 CSS 셀렉터 패턴 검색
+
+    목적:
+        GitHub나 StackOverflow에서 유사한 사이트의 셀렉터 패턴을 검색하여
+        참고 정보를 제공합니다.
+
+    검색 쿼리 예시:
+        "naver news article CSS selector site:github.com OR site:stackoverflow.com"
+
+    출력:
+        tavily_results: {
+            "success": True/False,
+            "results": [...],
+            "query": "...",
+            "error": "..." (if failed)
+        }
+    """
+    site_name = state.get("site_name", "unknown")
+
+    logger.info(f"[UC3 Tool 1] Tavily Web Search 시작: {site_name}")
+
+    try:
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_api_key:
+            logger.warning("[UC3 Tool 1] TAVILY_API_KEY not found. Skipping Tavily search.")
+            return {
+                **state,
+                "tavily_results": {
+                    "success": False,
+                    "error": "TAVILY_API_KEY not configured"
+                }
+            }
+
+        tavily = TavilySearchResults(
+            max_results=3,
+            search_depth="advanced",
+            api_key=tavily_api_key
+        )
+
+        # 검색 쿼리 생성
+        query = f"{site_name} news article CSS selector site:github.com OR site:stackoverflow.com"
+
+        # 검색 실행
+        results = tavily.invoke({"query": query})
+
+        logger.info(f"[UC3 Tool 1] ✅ Tavily 검색 완료: {len(results)} results")
+
+        return {
+            **state,
+            "tavily_results": {
+                "success": True,
+                "results": results,
+                "query": query
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3 Tool 1] Tavily search failed: {e}")
+        return {
+            **state,
+            "tavily_results": {
+                "success": False,
+                "error": str(e)
+            }
+        }
+
+
+# --- Tool 2: Firecrawl Preprocessing ---
+
+def firecrawl_preprocess_node(state: UC3State) -> dict:
+    """
+    Tool 2: Firecrawl HTML Preprocessing - HTML 전처리 (토큰 90% 감소)
+
+    목적:
+        Firecrawl API를 사용하여 HTML에서 주요 콘텐츠만 추출하고
+        광고, 내비게이션, 사이드바 등을 제거하여 토큰을 90% 감소시킵니다.
+
+    기능:
+        - onlyMainContent: True (메인 콘텐츠만 추출)
+        - formats: ['html', 'markdown'] (HTML + Markdown 모두 제공)
+        - waitFor: 2000ms (SSR 대응)
+
+    출력:
+        firecrawl_results: {
+            "success": True/False,
+            "html": "...",
+            "markdown": "...",
+            "metadata": {...},
+            "original_tokens": 50000,
+            "reduced_tokens": 5000
+        }
+    """
+    url = state.get("url")
+    raw_html = state.get("raw_html", "")
+
+    logger.info(f"[UC3 Tool 2] Firecrawl Preprocessing 시작: {url}")
+
+    try:
+        firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY")
+        if not firecrawl_api_key or FirecrawlApp is None:
+            logger.warning("[UC3 Tool 2] Firecrawl not available. Using fallback preprocessing.")
+            # Fallback: 기존 preprocess_html 사용
+            preprocessed = preprocess_html(raw_html)
+            return {
+                **state,
+                "firecrawl_results": {
+                    "success": False,
+                    "html": preprocessed,
+                    "error": "Firecrawl not configured, used fallback",
+                    "original_tokens": len(raw_html) // 4,
+                    "reduced_tokens": len(preprocessed) // 4
+                }
+            }
+
+        firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
+
+        # Firecrawl v2 API - keyword arguments로 전달 (params 사용 안 함)
+        result = firecrawl.scrape(
+            url,
+            formats=['html', 'markdown'],
+            only_main_content=True,
+            wait_for=2000,  # SSR 대응
+            timeout=30000
+        )
+
+        # Firecrawl v2 returns Document object
+        cleaned_html = result.html if hasattr(result, 'html') else result.get('html', '')
+        cleaned_markdown = result.markdown if hasattr(result, 'markdown') else result.get('markdown', '')
+        metadata = result.metadata if hasattr(result, 'metadata') else result.get('metadata', {})
+
+        original_tokens = len(raw_html) // 4
+        reduced_tokens = len(cleaned_html) // 4
+        reduction_rate = (1 - reduced_tokens / original_tokens) * 100 if original_tokens > 0 else 0
+
+        logger.info(f"[UC3 Tool 2] ✅ Firecrawl 완료: {original_tokens} → {reduced_tokens} tokens ({reduction_rate:.1f}% 감소)")
+
+        return {
+            **state,
+            "firecrawl_results": {
+                "success": True,
+                "html": cleaned_html,
+                "markdown": cleaned_markdown,
+                "metadata": metadata,
+                "original_tokens": original_tokens,
+                "reduced_tokens": reduced_tokens
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3 Tool 2] Firecrawl failed: {e}")
+        # Fallback
+        preprocessed = preprocess_html(raw_html)
+        return {
+            **state,
+            "firecrawl_results": {
+                "success": False,
+                "html": preprocessed,
+                "error": str(e),
+                "original_tokens": len(raw_html) // 4,
+                "reduced_tokens": len(preprocessed) // 4
+            }
+        }
+
+
+# --- Tool 3: Beautiful Soup DOM Analyzer ---
+
+@tool
+def analyze_dom_patterns(html: str) -> dict:
+    """
+    Tool 3: Beautiful Soup DOM Analyzer - DOM 구조 통계 분석
+
+    목적:
+        BeautifulSoup을 사용하여 HTML의 DOM 구조를 통계적으로 분석하고
+        제목, 본문, 날짜 셀렉터 후보를 추출합니다.
+
+    분석 항목:
+        1. 제목 후보: H1/H2/H3 태그 중 10-200자 텍스트
+        2. 본문 후보: article/div/section 중 가장 긴 텍스트 블록 (300자 이상)
+        3. 날짜 후보: time 태그 또는 날짜 패턴 포함 텍스트
+
+    반환:
+        {
+            "title_candidates": [...],
+            "body_candidates": [...],
+            "date_candidates": [...]
+        }
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # 1. 제목 후보 (H1/H2/H3 태그, 10-200자)
+    title_candidates = []
+    for tag in soup.find_all(['h1', 'h2', 'h3']):
+        # h2/h3 내부의 span도 체크 (네이버 뉴스 패턴)
+        span = tag.find('span')
+        text = span.get_text(strip=True) if span else tag.get_text(strip=True)
+
+        if 10 <= len(text) <= 200:
+            selector = generate_css_selector(tag)
+
+            # ID나 특정 클래스가 있으면 신뢰도 상승
+            has_id = tag.get('id') is not None
+            has_title_class = any(cls in tag.get('class', []) for cls in ['title', 'headline', 'head'])
+
+            confidence = 0.9 if tag.name == 'h1' else (0.8 if tag.name == 'h2' else 0.6)
+            if has_id or has_title_class:
+                confidence += 0.1
+
+            title_candidates.append({
+                "selector": selector,
+                "text_preview": text[:50],
+                "tag_name": tag.name,
+                "confidence": min(1.0, confidence)
+            })
+
+    # 2. 본문 후보 (article, div, section 중 가장 긴 텍스트)
+    body_candidates = []
+    for tag in soup.find_all(['article', 'div', 'section']):
+        text = tag.get_text(strip=True)
+        if len(text) >= 300:  # 최소 300자
+            selector = generate_css_selector(tag)
+
+            # ID나 특정 클래스가 있으면 신뢰도 상승
+            has_article_id = tag.get('id') is not None
+            has_article_class = any(cls in tag.get('class', []) for cls in ['article', 'content', 'body', '_article'])
+
+            confidence = min(1.0, len(text) / 2000)
+            if tag.name == 'article':
+                confidence += 0.2
+            if has_article_id or has_article_class:
+                confidence += 0.1
+
+            body_candidates.append({
+                "selector": selector,
+                "text_length": len(text),
+                "text_preview": text[:100],
+                "tag_name": tag.name,
+                "confidence": min(1.0, confidence)
+            })
+
+    # 3. 날짜 후보 (time 태그 또는 날짜 패턴 매칭)
+    date_candidates = []
+    date_pattern = r'\d{4}[-/.년]\s*\d{1,2}[-/.월]\s*\d{1,2}'
+
+    for tag in soup.find_all(['time', 'span', 'div']):
+        text = tag.get_text(strip=True)
+        has_date_attr = tag.get('data-date-time') or tag.get('datetime') or tag.get('data-date')
+
+        if re.search(date_pattern, text) or has_date_attr:
+            selector = generate_css_selector(tag)
+
+            # data-date-time 속성이 있으면 신뢰도 상승
+            confidence = 1.0 if tag.name == 'time' else 0.7
+            if has_date_attr:
+                confidence = 1.0
+
+            date_candidates.append({
+                "selector": selector,
+                "text_preview": text[:50] if text else str(has_date_attr)[:50],
+                "tag_name": tag.name,
+                "confidence": confidence
+            })
+
+    return {
+        "title_candidates": sorted(title_candidates, key=lambda x: x['confidence'], reverse=True)[:3],
+        "body_candidates": sorted(body_candidates, key=lambda x: x['text_length'], reverse=True)[:3],
+        "date_candidates": sorted(date_candidates, key=lambda x: x['confidence'], reverse=True)[:3]
+    }
+
+
+def beautifulsoup_analyze_node(state: UC3State) -> dict:
+    """
+    Tool 3 Node: BeautifulSoup DOM 분석 노드
+
+    Tool인 analyze_dom_patterns를 호출하여 DOM 구조를 분석합니다.
+    BeautifulSoup은 FULL HTML을 분석해야 하므로 raw_html을 사용합니다.
+    """
+    # IMPORTANT: BeautifulSoup은 전체 HTML 필요 (firecrawl_results는 토큰 축소됨)
+    html = state.get('raw_html', '')
+
+    logger.info("[UC3 Tool 3] BeautifulSoup DOM Analysis 시작")
+
+    try:
+        analysis = analyze_dom_patterns.invoke({"html": html})
+
+        logger.info(f"[UC3 Tool 3] ✅ DOM 분석 완료: "
+                   f"제목 {len(analysis.get('title_candidates', []))}개, "
+                   f"본문 {len(analysis.get('body_candidates', []))}개, "
+                   f"날짜 {len(analysis.get('date_candidates', []))}개")
+
+        return {
+            **state,
+            "beautifulsoup_analysis": {
+                "success": True,
+                "analysis": analysis
+            }
+        }
+    except Exception as e:
+        logger.error(f"[UC3 Tool 3] BeautifulSoup analysis failed: {e}")
+        return {
+            **state,
+            "beautifulsoup_analysis": {
+                "success": False,
+                "error": str(e)
+            }
+        }
+
+
+# --- Agent 1: GPT-4o Proposer (with Tools) ---
+
+def gpt_discover_agent_node(state: UC3State) -> dict:
+    """
+    Agent 1: GPT-4o Proposer with 3 Tools
+
+    목적:
+        3개 Tool 결과를 종합하여 CSS 셀렉터를 제안합니다.
+
+    Tools:
+        - Tavily Search Results (유사 사이트 패턴)
+        - Firecrawl HTML (전처리된 HTML)
+        - BeautifulSoup Analysis (DOM 통계)
+
+    출력:
+        gpt_proposal: {
+            "selectors": {
+                "title": {"selector": "...", "confidence": 0.95, "reasoning": "..."},
+                "body": {"selector": "...", "confidence": 0.88, "reasoning": "..."},
+                "date": {"selector": "...", "confidence": 0.92, "reasoning": "..."}
+            },
+            "overall_confidence": 0.92
+        }
+    """
+    site_name = state.get("site_name", "unknown")
+    tavily_results = state.get("tavily_results", {})
+    firecrawl_results = state.get("firecrawl_results", {})
+    bs_analysis = state.get("beautifulsoup_analysis", {})
+
+    logger.info(f"[UC3 Agent 1] GPT-4o Proposer 시작: {site_name}")
+
+    # Simplified approach: GPT-4o directly analyzes tool results without agent framework
+    # (Agent framework로 하면 복잡하므로 직접 LLM 호출)
+
+    try:
+        gpt_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+        prompt = f"""You are a CSS Selector discovery expert.
+
+You have 3 tool results to help you:
+
+1. **Tavily Search Results** (similar sites' selector patterns):
+{json.dumps(tavily_results, indent=2, ensure_ascii=False)[:1000]}
+
+2. **Firecrawl Cleaned HTML** (preprocessed, main content only):
+{firecrawl_results.get('html', '')[:2000]}
+
+3. **BeautifulSoup DOM Analysis** (statistical candidates):
+{json.dumps(bs_analysis.get('analysis', {}), indent=2, ensure_ascii=False)}
+
+**Task**:
+Generate CSS selectors for title, body, and date based on the above tool results.
+
+**Return JSON format**:
+{{
+    "selectors": {{
+        "title": {{"selector": "...", "confidence": 0.0-1.0, "reasoning": "..."}},
+        "body": {{"selector": "...", "confidence": 0.0-1.0, "reasoning": "..."}},
+        "date": {{"selector": "...", "confidence": 0.0-1.0, "reasoning": "..."}}
+    }},
+    "overall_confidence": 0.0-1.0
+}}
+
+**Guidelines**:
+- Prefer selectors from BeautifulSoup DOM analysis (they're statistically validated)
+- Use Tavily results as reference patterns
+- Use Firecrawl HTML to verify selector validity
+- Provide clear reasoning for each selector choice
+"""
+
+        response = gpt_llm.invoke([{"role": "user", "content": prompt}])
+
+        # JSON 파싱
+        try:
+            gpt_output = json.loads(response.content)
+        except:
+            # Fallback: extract JSON from markdown code block
+            import re
+            json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+            if json_match:
+                gpt_output = json.loads(json_match.group(1))
+            else:
+                raise ValueError("Failed to parse GPT-4o JSON response")
+
+        overall_conf = gpt_output.get('overall_confidence', 0.0)
+
+        logger.info(f"[UC3 Agent 1] ✅ GPT-4o 제안 완료: confidence={overall_conf:.2f}")
+
+        return {
+            **state,
+            "gpt_proposal": gpt_output,
+            "gpt_confidence": overall_conf
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3 Agent 1] GPT-4o discovery failed: {e}")
+        return {
+            **state,
+            "gpt_proposal": {"error": str(e)},
+            "gpt_confidence": 0.0
+        }
+
+
+# --- Agent 2: Gemini Validator (with Validation Tool) ---
+
+@tool
+def validate_selector_tool(selector: str, selector_type: str, html: str) -> dict:
+    """
+    Validation Tool: CSS 셀렉터를 실제 HTML에서 테스트
+
+    Args:
+        selector: CSS 셀렉터 (예: "article > h1.title")
+        selector_type: "title" | "body" | "date"
+        html: 테스트할 HTML 문자열
+
+    Returns:
+        {
+            "valid": True/False,
+            "confidence": 0.0-1.0,
+            "extracted_text": "...",
+            "text_length": 123
+        }
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+
+    try:
+        elem = soup.select_one(selector)
+
+        if not elem:
+            return {
+                "valid": False,
+                "confidence": 0.0,
+                "error": "Selector not found in HTML"
+            }
+
+        text = elem.get_text(strip=True)
+
+        # 타입별 검증
+        if selector_type == "title":
+            valid = 10 <= len(text) <= 200
+            confidence = min(1.0, len(text) / 50) if valid else 0.0
+
+        elif selector_type == "body":
+            valid = len(text) >= 100
+            confidence = min(1.0, len(text) / 500) if valid else 0.0
+
+        elif selector_type == "date":
+            date_pattern = r'\d{4}[-/.년]\s*\d{1,2}[-/.월]\s*\d{1,2}'
+            valid = bool(re.search(date_pattern, text))
+            confidence = 1.0 if valid else 0.0
+
+        else:
+            valid = False
+            confidence = 0.0
+
+        return {
+            "valid": valid,
+            "confidence": round(confidence, 2),
+            "extracted_text": text[:100],
+            "text_length": len(text)
+        }
+
+    except Exception as e:
+        return {
+            "valid": False,
+            "confidence": 0.0,
+            "error": str(e)
+        }
+
+
+def gemini_validate_agent_node(state: UC3State) -> dict:
+    """
+    Agent 2: Gemini Validator with Validation Tool
+
+    목적:
+        GPT-4o의 제안을 실제 HTML에서 테스트하여 검증합니다.
+
+    Tool:
+        validate_selector_tool - 각 셀렉터를 실제 HTML에서 테스트
+
+    출력:
+        gemini_validation: {
+            "best_selectors": {"title": "...", "body": "...", "date": "..."},
+            "validation_details": {...},
+            "overall_confidence": 0.95
+        }
+    """
+    gpt_proposal = state.get("gpt_proposal", {})
+    # IMPORTANT: 검증은 full HTML로 해야 정확함
+    html = state.get('raw_html', '')
+
+    logger.info("[UC3 Agent 2] Gemini Validator 시작")
+    logger.info(f"[UC3 Agent 2] GPT Proposal: {gpt_proposal}")
+
+    # Simplified approach: Use Gemini 2.5 Flash (stable paid tier)
+
+    try:
+        gemini_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-lite",
+            temperature=0,
+            google_api_key=os.getenv("GOOGLE_API_KEY")
+        )
+
+        # GPT 제안 셀렉터 추출
+        proposed_selectors = gpt_proposal.get('selectors', {})
+
+        # 각 셀렉터를 validate_selector_tool로 테스트
+        validation_details = {}
+
+        for sel_type in ['title', 'body', 'date']:
+            selector = proposed_selectors.get(sel_type, {}).get('selector', '')
+            if selector:
+                validation = validate_selector_tool.invoke({
+                    "selector": selector,
+                    "selector_type": sel_type,
+                    "html": html
+                })
+                validation_details[sel_type] = validation
+                logger.info(f"[UC3 Agent 2] {sel_type} validation: {validation}")
+            else:
+                validation_details[sel_type] = {"valid": False, "confidence": 0.0, "error": "No selector proposed"}
+                logger.warning(f"[UC3 Agent 2] {sel_type}: No selector proposed by GPT")
+
+        # Gemini가 검증 결과를 분석하여 최종 판단
+        prompt = f"""You are a CSS Selector validator.
+
+GPT-4o proposed these selectors:
+{json.dumps(proposed_selectors, indent=2, ensure_ascii=False)}
+
+Validation results (tested on actual HTML):
+{json.dumps(validation_details, indent=2, ensure_ascii=False)}
+
+**Task**:
+1. Analyze validation results
+2. Select the BEST selectors (or suggest improvements if validation failed)
+3. Provide overall confidence score
+
+**Return JSON**:
+{{
+    "best_selectors": {{
+        "title": "...",
+        "body": "...",
+        "date": "..."
+    }},
+    "validation_details": (keep the validation_details as-is),
+    "overall_confidence": 0.0-1.0,
+    "reasoning": "..."
+}}
+"""
+
+        response = gemini_llm.invoke([{"role": "user", "content": prompt}])
+
+        # JSON 파싱
+        try:
+            gemini_output = json.loads(response.content)
+        except:
+            import re
+            json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+            if json_match:
+                gemini_output = json.loads(json_match.group(1))
+            else:
+                raise ValueError("Failed to parse Gemini JSON response")
+
+        overall_conf = gemini_output.get('overall_confidence', 0.0)
+
+        logger.info(f"[UC3 Agent 2] ✅ Gemini 검증 완료: confidence={overall_conf:.2f}")
+
+        return {
+            **state,
+            "gemini_validation": gemini_output,
+            "gemini_confidence": overall_conf
+        }
+
+    except Exception as e:
+        logger.error(f"[UC3 Agent 2] Gemini validation failed: {e}")
+        logger.warning("[UC3 Agent 2] Falling back to GPT-4o-mini for validation")
+
+        # Fallback: GPT-4o-mini로 검증
+        try:
+            fallback_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+            prompt = f"""You are a CSS Selector validator.
+
+GPT-4o proposed these selectors:
+{json.dumps(proposed_selectors, indent=2, ensure_ascii=False)}
+
+Validation results (tested on actual HTML):
+{json.dumps(validation_details, indent=2, ensure_ascii=False)}
+
+**Task**:
+1. Analyze validation results
+2. Select the BEST selectors
+3. Provide overall confidence score
+
+**Return JSON**:
+{{
+    "best_selectors": {{
+        "title": "...",
+        "body": "...",
+        "date": "..."
+    }},
+    "validation_details": (keep as-is),
+    "overall_confidence": 0.0-1.0,
+    "reasoning": "..."
+}}"""
+
+            response = fallback_llm.invoke([{"role": "user", "content": prompt}])
+
+            try:
+                fallback_output = json.loads(response.content)
+            except:
+                import re
+                json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+                if json_match:
+                    fallback_output = json.loads(json_match.group(1))
+                else:
+                    raise ValueError("Failed to parse fallback response")
+
+            overall_conf = fallback_output.get('overall_confidence', 0.0)
+            logger.info(f"[UC3 Agent 2] ✅ Fallback GPT-4o-mini 검증 완료: confidence={overall_conf:.2f}")
+
+            return {
+                **state,
+                "gemini_validation": fallback_output,
+                "gemini_confidence": overall_conf
+            }
+
+        except Exception as fallback_error:
+            logger.error(f"[UC3 Agent 2] Fallback also failed: {fallback_error}")
+            return {
+                **state,
+                "gemini_validation": {"error": f"Gemini and fallback failed: {e}, {fallback_error}"},
+                "gemini_confidence": 0.0
+            }
+
+
+# --- Consensus Calculation ---
+
+def calculate_uc3_consensus_node(state: UC3State) -> dict:
+    """
+    UC3 Weighted Consensus Calculation
+
+    공식:
+        Consensus Score = 0.3 × GPT confidence
+                        + 0.3 × Gemini confidence
+                        + 0.4 × Extraction quality
+
+    Threshold:
+        0.7 이상 → consensus_reached = True (UC2는 0.6)
+
+    출력:
+        consensus_score: float (0.0-1.0)
+        consensus_reached: bool
+        extraction_quality: float (0.0-1.0)
+        discovered_selectors: dict (if consensus_reached)
+    """
+    gpt_conf = state.get('gpt_confidence', 0.0)
+    gemini_conf = state.get('gemini_confidence', 0.0)
+    gemini_validation = state.get('gemini_validation', {})
+
+    logger.info("[UC3 Consensus] 가중 합의 계산 시작")
+
+    # Extraction Quality 계산
+    validation_details = gemini_validation.get('validation_details', {})
+
+    extraction_scores = []
+    for selector_type in ['title', 'body', 'date']:
+        detail = validation_details.get(selector_type, {})
+        extraction_scores.append(detail.get('confidence', 0.0))
+
+    extraction_quality = sum(extraction_scores) / len(extraction_scores) if extraction_scores else 0.0
+
+    # 가중 합의 (UC2와 동일한 공식)
+    consensus_score = (
+        gpt_conf * 0.3 +
+        gemini_conf * 0.3 +
+        extraction_quality * 0.4
+    )
+
+    # UC3 threshold: 0.7 (UC2는 0.6)
+    consensus_reached = consensus_score >= 0.7
+
+    logger.info(f"[UC3 Consensus] GPT={gpt_conf:.2f}, Gemini={gemini_conf:.2f}, Extract={extraction_quality:.2f} → Score={consensus_score:.2f}")
+    logger.info(f"[UC3 Consensus] Threshold=0.7, Reached={consensus_reached}")
+
+    return {
+        **state,
+        "consensus_score": round(consensus_score, 2),
+        "consensus_reached": consensus_reached,
+        "extraction_quality": round(extraction_quality, 2),
+        "discovered_selectors": gemini_validation.get('best_selectors') if consensus_reached else None,
+        "next_action": "save" if consensus_reached else "human_review"
+    }
+
+
+# ============================================================
+# Step 5: StateGraph 구성
+# ============================================================
+
+def create_uc3_agent():
+    """
+    UC3 New Site Auto-Discovery Agent 생성 (3-Tool + 2-Agent + Consensus)
+
+    NEW Workflow (Enhanced):
+        START
+          ↓
+        fetch_html (HTML 다운로드)
+          ↓
+        firecrawl_preprocess (Tool 2: HTML 전처리, 토큰 90% 감소)
+          ↓
+        tavily_search (Tool 1: 유사 사이트 패턴 검색)
+          ↓
+        beautifulsoup_analyze (Tool 3: DOM 구조 통계 분석)
+          ↓
+        gpt_discover_agent (Agent 1: GPT-4o Proposer with 3 Tools)
+          ↓
+        gemini_validate_agent (Agent 2: Gemini Validator with Validation Tool)
+          ↓
+        calculate_consensus (Weighted Consensus: 0.3×GPT + 0.3×Gemini + 0.4×Extract ≥ 0.7)
+          ↓
+        [save_selectors OR END (human_review)]
+
+    Changes from OLD workflow:
+        - OLD: preprocess_html → gpt_discover → validate_selectors → check_quality
+        - NEW: firecrawl_preprocess → tavily_search → beautifulsoup_analyze
+               → gpt_discover_agent → gemini_validate_agent → calculate_consensus
+    """
+    graph = StateGraph(UC3State)
+
+    # 노드 추가
+    graph.add_node("fetch_html", fetch_html_node)
+    graph.add_node("firecrawl_preprocess", firecrawl_preprocess_node)
+    graph.add_node("tavily_search", tavily_search_node)
+    graph.add_node("beautifulsoup_analyze", beautifulsoup_analyze_node)
+    graph.add_node("gpt_discover_agent", gpt_discover_agent_node)
+    graph.add_node("gemini_validate_agent", gemini_validate_agent_node)
+    graph.add_node("calculate_consensus", calculate_uc3_consensus_node)
+    graph.add_node("save_selectors", save_selectors_node)
+
+    # 엣지 추가 (순차 실행)
+    graph.add_edge(START, "fetch_html")
+    graph.add_edge("fetch_html", "firecrawl_preprocess")
+    graph.add_edge("firecrawl_preprocess", "tavily_search")
+    graph.add_edge("tavily_search", "beautifulsoup_analyze")
+    graph.add_edge("beautifulsoup_analyze", "gpt_discover_agent")
+    graph.add_edge("gpt_discover_agent", "gemini_validate_agent")
+    graph.add_edge("gemini_validate_agent", "calculate_consensus")
+
+    # 조건부 엣지: consensus_reached에 따라 분기
+    def route_after_consensus(state: UC3State):
+        consensus_reached = state.get("consensus_reached", False)
+
+        if consensus_reached:
+            return "save_selectors"
+        else:
+            # Consensus 실패 → 휴먼 리뷰
+            return END
+
+    graph.add_conditional_edges(
+        "calculate_consensus",
+        route_after_consensus,
+        {
+            "save_selectors": "save_selectors",
+            END: END
+        }
+    )
+
+    graph.add_edge("save_selectors", END)
+
+    return graph.compile()
+
+
+# ============================================================
+# Step 6: CLI 실행 (테스트용)
+# ============================================================
+
+if __name__ == "__main__":
+    import sys
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    # API 키 확인
+    if not os.getenv("OPENAI_API_KEY"):
+        logger.error("❌ OPENAI_API_KEY 환경변수가 설정되지 않았습니다")
+        logger.error("   .env 파일에 OPENAI_API_KEY를 설정하세요")
+        sys.exit(1)
+
+    # 테스트 URL
+    test_url = "https://www.yna.co.kr/view/AKR20251109000001001"
+
+    if len(sys.argv) > 1:
+        test_url = sys.argv[1]
+
+    logger.info("=" * 80)
+    logger.info("UC3 New Site Auto-Discovery Agent 실행")
+    logger.info("=" * 80)
+    logger.info(f"Test URL: {test_url}")
+
+    # UC3 Agent 생성
+    agent = create_uc3_agent()
+
+    # 실행
+    inputs = {
+        "url": test_url,
+        "sample_urls": []
+    }
+
+    result = agent.invoke(inputs)
+
+    # 결과 출력
+    logger.info("\n" + "=" * 80)
+    logger.info("UC3 실행 결과")
+    logger.info("=" * 80)
+    logger.info(f"Site Name: {result.get('site_name')}")
+    logger.info(f"Confidence: {result.get('confidence', 0):.2f}")
+    logger.info(f"Success Rate: {result.get('success_rate', 0):.2%}")
+    logger.info(f"Next Action: {result.get('next_action')}")
+
+    # Consensus 디버깅
+    logger.info(f"\n=== Consensus Details ===")
+    logger.info(f"GPT Confidence: {result.get('gpt_confidence', 0):.2f}")
+    logger.info(f"Gemini Confidence: {result.get('gemini_confidence', 0):.2f}")
+    logger.info(f"Extraction Quality: {result.get('extraction_quality', 0):.2f}")
+    logger.info(f"Consensus Score: {result.get('consensus_score', 0):.2f}")
+    logger.info(f"Consensus Reached: {result.get('consensus_reached', False)}")
+
+    if result.get("gpt_analysis"):
+        analysis = result["gpt_analysis"]
+        logger.info(f"\nGenerated Selectors:")
+        logger.info(f"  Title: {analysis.get('title_selector')}")
+        logger.info(f"  Body: {analysis.get('body_selector')}")
+        logger.info(f"  Date: {analysis.get('date_selector')}")
+        logger.info(f"  Site Type: {analysis.get('site_type')}")
+
+    if result.get("validation_report"):
+        report = result["validation_report"]
+        logger.info(f"\nValidation Report:")
+        logger.info(f"  Title Valid: {'✅' if report.get('title_valid') else '❌'}")
+        logger.info(f"  Body Valid: {'✅' if report.get('body_valid') else '❌'}")
+        logger.info(f"  Date Valid: {'✅' if report.get('date_valid') else '❌'}")
+
+    logger.info("\n" + "=" * 80)
+    logger.info("✅ UC3 실행 완료!")
+    logger.info("=" * 80)

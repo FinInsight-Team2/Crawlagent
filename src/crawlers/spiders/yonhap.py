@@ -51,11 +51,14 @@ class YonhapSpider(scrapy.Spider):
 
     def trigger_uc2_workflow(self, url: str) -> None:
         """
-        UC2 Self-Healing 워크플로우 트리거
+        UC2 Self-Healing 워크플로우 트리거 (LangGraph Multi-Agent)
 
         연속 3회 UC1 실패 시 호출됨.
-        UC2는 Multi-Agent (GPT + Gemini)를 사용하여 새로운 CSS Selector를 제안하고,
-        DecisionLog 테이블에 저장하여 Human Review를 대기합니다.
+        UC2는 Multi-Agent Consensus (GPT + Gemini)를 사용하여 새로운 CSS Selector를 제안.
+
+        자동화 흐름:
+        - 합의 달성(consensus_score >= 0.8): 자동 DB 저장 후 UC1 복귀
+        - 합의 실패(consensus_score < 0.6): DecisionLog 기록 (PoC: 관리자 확인)
         """
         self.logger.warning(
             f"[UC2 트리거] 연속 {self.failure_count}회 실패 감지 → Self-Healing 시작"
@@ -63,39 +66,96 @@ class YonhapSpider(scrapy.Spider):
 
         try:
             import requests
+            from src.workflow.uc2_hitl import build_uc2_graph
             from src.storage.database import get_db
-            from src.storage.models import DecisionLog
+            from src.storage.models import Selector, DecisionLog
 
             # 1. HTML 페이지 다시 가져오기
             response = requests.get(url, timeout=30)
             html_content = response.text
 
-            # 2. UC2 HITL 워크플로우 실행 (또는 decision_log 생성)
-            # 실제 환경에서는 LangGraph workflow를 실행하지만,
-            # 여기서는 단순히 DecisionLog에 "pending" 상태로 기록
-            db = next(get_db())
-            try:
-                log = DecisionLog(
-                    url=url,
-                    site_name="yonhap",
-                    gpt_analysis={"note": "UC1 failure triggered UC2, awaiting GPT analysis"},
-                    gemini_validation={"note": "Awaiting Gemini validation"},
-                    consensus_reached=False,  # Human review 필요
-                    retry_count=0
-                )
-                db.add(log)
-                db.commit()
+            # 2. UC2 HITL 워크플로우 실제 실행 (LangGraph)
+            self.logger.info(f"[UC2] LangGraph 워크플로우 실행 중... (URL: {url})")
 
-                self.logger.info(
-                    f"[UC2] DecisionLog 생성 완료 (ID: {log.id}) - Gradio UI에서 확인 가능"
-                )
-            finally:
-                db.close()
+            uc2_graph = build_uc2_graph()
+            uc2_result = uc2_graph.invoke({
+                "url": url,
+                "html_content": html_content,
+                "site_name": "yonhap",
+                "current_selectors": {
+                    "title": self.selector.title_selector,
+                    "body": self.selector.body_selector,
+                    "date": self.selector.date_selector
+                }
+            })
+
+            # 3. 합의 결과 처리
+            consensus_reached = uc2_result.get("consensus_reached", False)
+            consensus_score = uc2_result.get("consensus_score", 0.0)
+            next_action = uc2_result.get("next_action", "human_review")
+
+            self.logger.info(
+                f"[UC2 결과] consensus_reached={consensus_reached}, "
+                f"score={consensus_score:.2f}, next_action={next_action}"
+            )
+
+            # 4. 합의 달성 시: 자동 DB 저장 (Auto-Healing!)
+            if consensus_reached and next_action == "end":
+                db = next(get_db())
+                try:
+                    # Selector 업데이트
+                    selector = db.query(Selector).filter_by(site_name="yonhap").first()
+                    if selector:
+                        selector.title_selector = uc2_result["proposed_selectors"]["title"]
+                        selector.body_selector = uc2_result["proposed_selectors"]["body"]
+                        selector.date_selector = uc2_result["proposed_selectors"]["date"]
+                        db.commit()
+
+                        self.logger.info(
+                            f"[UC2 자동 승인] Selector 업데이트 완료 (score: {consensus_score:.2f}) "
+                            f"→ UC1 복귀"
+                        )
+
+                        # Spider의 selector 인스턴스도 업데이트
+                        self.selector = selector
+
+                        # 실패 카운터 리셋 (다시 정상 크롤링)
+                        self.failure_count = 0
+                finally:
+                    db.close()
+
+            # 5. 합의 실패 시: DecisionLog 생성 (PoC: 관리자가 DB 확인)
+            elif next_action == "human_review":
+                db = next(get_db())
+                try:
+                    log = DecisionLog(
+                        url=url,
+                        site_name="yonhap",
+                        gpt_analysis=uc2_result.get("gpt_analysis", {}),
+                        gemini_validation=uc2_result.get("gemini_validation", {}),
+                        consensus_score=consensus_score,
+                        consensus_reached=False,
+                        retry_count=uc2_result.get("retry_count", 0),
+                        proposed_selectors=uc2_result.get("proposed_selectors", {}),
+                        validation_results=uc2_result.get("validation_results", {})
+                    )
+                    db.add(log)
+                    db.commit()
+
+                    self.logger.warning(
+                        f"[UC2 합의 실패] DecisionLog 생성 완료 (ID: {log.id}) "
+                        f"→ PoC: DB 기록 완료, 관리자가 확인 가능"
+                    )
+
+                finally:
+                    db.close()
 
             self.uc2_triggered = True  # 중복 트리거 방지
 
         except Exception as e:
             self.logger.error(f"[UC2 실패] {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def __init__(self, category=None, start_urls=None, target_date=None, *args, **kwargs):
         super(YonhapSpider, self).__init__(*args, **kwargs)

@@ -1,8 +1,10 @@
 {
   "dependencies": ["."],
   "graphs": {
+    "master_workflow": "./src/workflow/master_crawl_workflow.py:build_master_graph",
     "uc1_validation": "./src/workflow/uc1_validation.py:create_uc1_validation_agent",
-    "uc2_hitl": "./src/workflow/uc2_hitl.py:build_uc2_graph"
+    "uc2_self_heal": "./src/workflow/uc2_hitl.py:build_uc2_graph",
+    "uc3_new_site": "./src/workflow/uc3_new_site.py:create_uc3_agent"
   },
   "env": ".env"
 }
