@@ -6,87 +6,182 @@ Created: 2025-11-05
 """
 
 import os
+import pytest
 from dotenv import load_dotenv
 import requests
 from src.workflow.uc2_hitl import HITLState, gpt_propose_node, gemini_validate_node
 
-# .env 파일 로드
-load_dotenv()
 
-# 테스트 URL (BBC 뉴스)
-test_url = "https://www.bbc.com/news/articles/c0mzdy84dy7o"
+@pytest.fixture(scope="module")
+def test_html_content():
+    """BBC 뉴스 HTML 가져오기 (모듈당 1회만)"""
+    test_url = "https://www.bbc.com/news/articles/c0mzdy84dy7o"
+    response = requests.get(test_url, timeout=10)
+    return response.text
 
-print("=" * 80)
-print("[UC2 Multi-Agent Test] GPT Proposer + Gemini Validator")
-print("=" * 80)
 
-# 1. HTML Fetch
-print(f"\n[Step 1/3] Fetching HTML from {test_url}")
-response = requests.get(test_url, timeout=10)
-html_content = response.text
-print(f"✅ HTML fetched: {len(html_content)} characters")
+@pytest.fixture(scope="module")
+def test_url():
+    """테스트 URL"""
+    return "https://www.bbc.com/news/articles/c0mzdy84dy7o"
 
-# 2. State 초기화
-initial_state: HITLState = {
-    "url": test_url,
-    "site_name": "bbc",
-    "html_content": html_content,
-    "gpt_proposal": None,
-    "gemini_validation": None,
-    "consensus_reached": False,
-    "retry_count": 0,
-    "final_selectors": None,
-    "error_message": None,
-    "next_action": None
-}
 
-# 3. GPT Propose Node 실행
-print("\n[Step 2/3] 🤖 GPT Proposing CSS Selectors...")
-state_after_gpt = gpt_propose_node(initial_state)
+@pytest.fixture(scope="module")
+def initial_state(test_url, test_html_content):
+    """초기 State 생성"""
+    return {
+        "url": test_url,
+        "site_name": "bbc",
+        "html_content": test_html_content,
+        "gpt_proposal": None,
+        "gemini_validation": None,
+        "consensus_reached": False,
+        "retry_count": 0,
+        "final_selectors": None,
+        "error_message": None,
+        "next_action": None
+    }
 
-if state_after_gpt.get("error_message"):
-    print(f"❌ GPT Error: {state_after_gpt['error_message']}")
-    exit(1)
 
-gpt_proposal = state_after_gpt["gpt_proposal"]
-print(f"✅ GPT Proposal Generated:")
-print(f"   Title:  {gpt_proposal['title_selector']}")
-print(f"   Body:   {gpt_proposal['body_selector']}")
-print(f"   Date:   {gpt_proposal['date_selector']}")
-print(f"   Confidence: {gpt_proposal['confidence']}")
+@pytest.mark.integration
+@pytest.mark.slow
+def test_gpt_gemini_integration_success(initial_state):
+    """GPT + Gemini 통합 테스트 - 정상 플로우"""
+    load_dotenv()
 
-# 4. Gemini Validate Node 실행
-print("\n[Step 3/3] 🔍 Gemini Validating Selectors...")
-final_state = gemini_validate_node(state_after_gpt)
+    # GPT Propose Node 실행
+    state_after_gpt = gpt_propose_node(initial_state)
 
-if final_state.get("error_message"):
-    print(f"❌ Gemini Error: {final_state['error_message']}")
-    exit(1)
+    # GPT 에러 체크
+    if state_after_gpt.get("error_message"):
+        pytest.fail(f"GPT node failed with error: {state_after_gpt['error_message']}")
 
-gemini_validation = final_state["gemini_validation"]
-print(f"✅ Gemini Validation Complete:")
-print(f"   Valid: {gemini_validation['is_valid']}")
-print(f"   Confidence: {gemini_validation['confidence']}")
-print(f"   Feedback: {gemini_validation['feedback']}")
+    # GPT Proposal 검증
+    assert state_after_gpt.get("gpt_proposal") is not None, "GPT proposal should be generated"
+    gpt_proposal = state_after_gpt["gpt_proposal"]
+    assert "title_selector" in gpt_proposal, "Should have title_selector"
+    assert "body_selector" in gpt_proposal, "Should have body_selector"
+    assert "date_selector" in gpt_proposal, "Should have date_selector"
+    assert "confidence" in gpt_proposal, "Should have confidence"
 
-# 5. 최종 결과
-print("\n" + "=" * 80)
-print("[Final Result]")
-print("=" * 80)
-print(f"Consensus Reached: {final_state['consensus_reached']}")
-print(f"Next Action: {final_state['next_action']}")
-print(f"Retry Count: {final_state['retry_count']}")
+    # Gemini Validate Node 실행
+    final_state = gemini_validate_node(state_after_gpt)
 
-if final_state['consensus_reached']:
-    print("\n✅ SUCCESS: Multi-Agent Consensus Reached!")
-    print(f"\nFinal Selectors:")
-    for key, value in final_state['final_selectors'].items():
-        print(f"  {key}: {value}")
-else:
-    print(f"\n⚠️ RETRY NEEDED: {gemini_validation['feedback']}")
-    if final_state['next_action'] == 'retry':
-        print("   → Will retry with GPT again")
-    elif final_state['next_action'] == 'human_review':
-        print("   → Max retries reached, needs human review")
+    # Gemini 에러 체크
+    if final_state.get("error_message"):
+        pytest.fail(f"Gemini node failed with error: {final_state['error_message']}")
 
-print("=" * 80)
+    # Gemini Validation 검증
+    assert final_state.get("gemini_validation") is not None, "Gemini validation should exist"
+    gemini_validation = final_state["gemini_validation"]
+    assert "is_valid" in gemini_validation, "Should have is_valid"
+    assert "confidence" in gemini_validation, "Should have confidence"
+    assert "feedback" in gemini_validation, "Should have feedback"
+
+    # 최종 상태 검증
+    assert "consensus_reached" in final_state, "Should have consensus_reached field"
+    assert "next_action" in final_state, "Should have next_action field"
+    assert "retry_count" in final_state, "Should have retry_count field"
+
+    # Consensus가 true면 final_selectors가 있어야 함
+    if final_state["consensus_reached"]:
+        assert final_state["final_selectors"] is not None, "Should have final_selectors when consensus reached"
+        assert "title_selector" in final_state["final_selectors"]
+        assert "body_selector" in final_state["final_selectors"]
+        assert "date_selector" in final_state["final_selectors"]
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_gpt_gemini_state_continuity(initial_state):
+    """GPT → Gemini State 연속성 테스트"""
+    load_dotenv()
+
+    # GPT 실행
+    state_after_gpt = gpt_propose_node(initial_state)
+
+    if state_after_gpt.get("error_message"):
+        pytest.skip(f"GPT node failed, skipping: {state_after_gpt['error_message']}")
+
+    # State 필드 유지 확인
+    assert state_after_gpt["url"] == initial_state["url"], "URL should be preserved"
+    assert state_after_gpt["site_name"] == initial_state["site_name"], "Site name should be preserved"
+    assert state_after_gpt["html_content"] == initial_state["html_content"], "HTML content should be preserved"
+
+    # Gemini 실행
+    final_state = gemini_validate_node(state_after_gpt)
+
+    if final_state.get("error_message"):
+        pytest.skip(f"Gemini node failed, skipping: {final_state['error_message']}")
+
+    # GPT Proposal이 Gemini까지 전달되었는지 확인
+    assert final_state["gpt_proposal"] == state_after_gpt["gpt_proposal"], "GPT proposal should be preserved"
+    assert final_state["url"] == initial_state["url"], "URL should be preserved"
+    assert final_state["site_name"] == initial_state["site_name"], "Site name should be preserved"
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_consensus_logic(initial_state):
+    """Consensus 도달 로직 테스트"""
+    load_dotenv()
+
+    # GPT 실행
+    state_after_gpt = gpt_propose_node(initial_state)
+    if state_after_gpt.get("error_message"):
+        pytest.skip("GPT node failed, cannot test consensus")
+
+    # Gemini 실행
+    final_state = gemini_validate_node(state_after_gpt)
+    if final_state.get("error_message"):
+        pytest.skip("Gemini node failed, cannot test consensus")
+
+    # Consensus 관련 필드 검증
+    assert isinstance(final_state["consensus_reached"], bool), "consensus_reached should be boolean"
+    assert final_state["next_action"] in ["retry", "end", "human_review", None], "next_action should be valid"
+    assert isinstance(final_state["retry_count"], int), "retry_count should be integer"
+    assert final_state["retry_count"] >= 0, "retry_count should be non-negative"
+
+    # Consensus true인 경우
+    if final_state["consensus_reached"]:
+        assert final_state["final_selectors"] is not None, "Should have final_selectors"
+        assert final_state["next_action"] == "end", "Should end when consensus reached"
+
+    # Consensus false인 경우
+    else:
+        assert final_state["next_action"] in ["retry", "human_review"], "Should retry or request human review"
+        if final_state["next_action"] == "retry":
+            assert final_state["retry_count"] < 3, "Should retry only if count < 3"
+        elif final_state["next_action"] == "human_review":
+            assert final_state["retry_count"] >= 3, "Should request human review after 3 retries"
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_error_handling(test_url):
+    """에러 처리 테스트"""
+    load_dotenv()
+
+    # 잘못된 HTML로 State 생성
+    invalid_state: HITLState = {
+        "url": test_url,
+        "site_name": "bbc",
+        "html_content": "",  # 빈 HTML
+        "gpt_proposal": None,
+        "gemini_validation": None,
+        "consensus_reached": False,
+        "retry_count": 0,
+        "final_selectors": None,
+        "error_message": None,
+        "next_action": None
+    }
+
+    # GPT 실행 (에러 발생 가능)
+    state_after_gpt = gpt_propose_node(invalid_state)
+
+    # 에러가 발생하면 error_message가 있어야 함
+    if state_after_gpt.get("error_message"):
+        assert isinstance(state_after_gpt["error_message"], str), "Error message should be string"
+        assert len(state_after_gpt["error_message"]) > 0, "Error message should not be empty"
+        # 에러 발생 시 next_action이 설정되어야 함
+        assert state_after_gpt.get("next_action") is not None, "Should have next_action on error"

@@ -22,13 +22,28 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://crawlagent:dev_password@localhost:5432/crawlagent"
 )
 
-# SQLAlchemy 엔진 생성
+# SQLAlchemy 엔진 생성 (Production-Ready Configuration)
 engine = create_engine(
     DATABASE_URL,
     echo=False,  # SQL 쿼리 로그 출력 (개발 시 True로 변경 가능)
-    pool_size=5,  # 연결 풀 크기
-    max_overflow=10,  # 최대 추가 연결 수
-    pool_pre_ping=True,  # 연결 유효성 사전 확인
+
+    # Connection Pool Settings (Phase 3.3 Optimization)
+    pool_size=10,  # 기본 연결 풀 크기 (5 → 10, 동시 요청 처리 개선)
+    max_overflow=20,  # 최대 추가 연결 수 (10 → 20, 피크 타임 대응)
+    pool_pre_ping=True,  # 연결 유효성 사전 확인 (stale connection 방지)
+    pool_recycle=3600,  # 1시간마다 연결 재사용 (PostgreSQL idle timeout 대응)
+    pool_timeout=30,  # 연결 대기 최대 시간 (30초)
+
+    # Query Performance Settings
+    connect_args={
+        "options": "-c timezone=utc",  # UTC 타임존 설정
+        "connect_timeout": 10,  # 연결 타임아웃 (10초)
+    },
+
+    # Execution Settings
+    execution_options={
+        "isolation_level": "READ COMMITTED"  # PostgreSQL 기본 격리 수준
+    }
 )
 
 # 세션 팩토리 생성

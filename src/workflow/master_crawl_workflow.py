@@ -93,6 +93,16 @@ from datetime import datetime
 # LangChain imports for Supervisor LLM
 from langchain_openai import ChatOpenAI
 
+# Phase 1 Safety Enhancements: Supervisor reliability improvements
+from src.workflow.supervisor_safety import (
+    validate_confidence_threshold,
+    detect_routing_loop,
+    validate_state_transition,
+    log_safety_summary,
+    MIN_CONFIDENCE_THRESHOLD,
+    MAX_LOOP_REPEATS
+)
+
 
 # ============================================================================
 # Master State Definition
@@ -127,6 +137,18 @@ class MasterCrawlState(TypedDict):
     """UC1 연속 실패 횟수 (3회 실패 시 UC2 트리거)"""
 
     # === UC1 결과 ===
+    quality_passed: Optional[bool]
+    """UC1 품질 검증 통과 여부 (Supervisor가 확인하는 플래그)"""
+
+    extracted_title: Optional[str]
+    """UC1에서 추출한 제목 (전체, DB 저장용)"""
+
+    extracted_body: Optional[str]
+    """UC1에서 추출한 본문 (전체, DB 저장용)"""
+
+    extracted_date: Optional[str]
+    """UC1에서 추출한 날짜 (전체, DB 저장용)"""
+
     uc1_validation_result: Optional[dict]
     """
     UC1 Quality Validation 결과
@@ -238,14 +260,76 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
         uc1_result = state.get("uc1_validation_result")
         quality_passed = state.get("quality_passed", False)
 
-        # UC1 성공 → 종료
+        logger.debug(f"[Supervisor] UC1 완료: quality_passed={quality_passed}, uc1_result={uc1_result is not None}")
+
+        # UC1 성공 → DB 저장 후 종료
         if quality_passed:
             quality_score = uc1_result.get("quality_score", 0) if uc1_result else 0
-            logger.info(f"[Supervisor] ✅ UC1 passed (score={quality_score}) → Workflow END")
+            logger.info(f"[Supervisor] ✅ UC1 passed (score={quality_score}) → Saving to DB → Workflow END")
+
+            # DB 저장 로직
+            try:
+                from src.storage.database import get_db
+                from src.storage.models import CrawlResult
+                from datetime import datetime
+
+                db = next(get_db())
+
+                # 추출된 데이터 가져오기 (Master State에서 직접 가져옴)
+                title = state.get("extracted_title")
+                body = state.get("extracted_body")
+                date_str = state.get("extracted_date")
+
+                # CrawlResult 생성
+                crawl_result = CrawlResult(
+                    url=state["url"],
+                    site_name=state["site_name"],
+                    category=None,  # Gradio에서는 카테고리 없음
+                    category_kr=None,
+                    title=title,
+                    body=body,
+                    date=date_str,
+                    quality_score=quality_score,
+                    crawl_mode="2-agent",  # Master Workflow는 2-agent 모드
+                    crawl_duration_seconds=None,
+                    content_type="news",
+                    validation_status="verified",
+                    validation_method="2-agent",
+                    llm_reasoning=f"UC1 Quality Validation passed with score {quality_score}"
+                )
+
+                # DB에 저장 (중복 체크: URL이 unique key)
+                existing = db.query(CrawlResult).filter(CrawlResult.url == state["url"]).first()
+                if existing:
+                    logger.warning(f"[Supervisor] URL already exists in DB, updating: {state['url']}")
+                    existing.title = title
+                    existing.body = body
+                    existing.date = date_str
+                    existing.quality_score = quality_score
+                    existing.validation_status = "verified"
+                    existing.llm_reasoning = f"UC1 Quality Validation passed with score {quality_score}"
+                else:
+                    db.add(crawl_result)
+
+                db.commit()
+                logger.info(f"[Supervisor] 💾 CrawlResult saved to DB: {state['url']}")
+
+                # Selector success_count 증가
+                from src.storage.models import Selector
+                selector = db.query(Selector).filter(Selector.site_name == state["site_name"]).first()
+                if selector:
+                    selector.success_count += 1
+                    db.commit()
+                    logger.info(f"[Supervisor] 📈 Selector success_count incremented: {state['site_name']}")
+
+            except Exception as e:
+                logger.error(f"[Supervisor] ❌ Failed to save CrawlResult to DB: {e}")
+                # DB 저장 실패해도 워크플로우는 계속 진행 (나중에 재시도 가능)
+
             return Command(
                 update={
                     "next_action": "end",
-                    "workflow_history": history + [f"supervisor → END (UC1 success, score={quality_score})"]
+                    "workflow_history": history + [f"supervisor → DB_SAVED → END (UC1 success, score={quality_score})"]
                 },
                 goto=END
             )
@@ -254,17 +338,33 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
         if uc1_result:
             uc1_next_action = uc1_result.get("next_action")
             quality_score = uc1_result.get("quality_score", 0)
+            current_failure_count = state.get("failure_count", 0)
+
+            # Loop Detection: UC1 연속 실패 3회 초과 시 강제 종료
+            if current_failure_count >= 3:
+                logger.error(
+                    f"[Supervisor] 🛑 Loop Detection: UC1 failed {current_failure_count} times → Force END"
+                )
+                return Command(
+                    update={
+                        "next_action": "end",
+                        "error_message": f"Loop detected: UC1 failed {current_failure_count} consecutive times",
+                        "workflow_history": history + [f"supervisor → END (Loop Detection: {current_failure_count} failures)"]
+                    },
+                    goto=END
+                )
 
             # UC2 Self-Healing 라우팅
             if uc1_next_action == "heal":
                 logger.info(
-                    f"[Supervisor] 🔄 UC1 failed (score={quality_score}) → Routing to UC2 (Self-Healing)"
+                    f"[Supervisor] 🔄 UC1 failed (score={quality_score}, failure={current_failure_count + 1}/3) → Routing to UC2 (Self-Healing)"
                 )
                 return Command(
                     update={
                         "current_uc": "uc2",
                         "next_action": "uc2",
-                        "workflow_history": history + [f"supervisor → uc2_self_heal (UC1 score={quality_score})"]
+                        "failure_count": current_failure_count + 1,  # 실패 카운터 증가
+                        "workflow_history": history + [f"supervisor → uc2_self_heal (UC1 score={quality_score}, failures={current_failure_count + 1})"]
                     },
                     goto="uc2_self_heal"
                 )
@@ -278,7 +378,8 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
                     update={
                         "current_uc": "uc3",
                         "next_action": "uc3",
-                        "workflow_history": history + [f"supervisor → uc3_new_site (UC1 score={quality_score})"]
+                        "failure_count": current_failure_count + 1,  # 실패 카운터 증가
+                        "workflow_history": history + [f"supervisor → uc3_new_site (UC1 score={quality_score}, failures={current_failure_count + 1})"]
                     },
                     goto="uc3_new_site"
                 )
@@ -291,6 +392,7 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
                 return Command(
                     update={
                         "next_action": "end",
+                        "error_message": f"UC1 inconsistent state: passed=False but action={uc1_next_action}",
                         "workflow_history": history + [f"supervisor → END (UC1 inconsistent)"]
                     },
                     goto=END
@@ -301,6 +403,7 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
         return Command(
             update={
                 "next_action": "end",
+                "error_message": "UC1 completed but no result found (internal error)",
                 "workflow_history": history + ["supervisor → END (UC1 no result)"]
             },
             goto=END
@@ -310,34 +413,118 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
     if current_uc == "uc2":
         uc2_result = state.get("uc2_consensus_result")
 
-        # UC2 합의 성공 → UC1 복귀 (새로운 Selector로 재시도)
+        # UC2 합의 성공 → Selector UPDATE + DecisionLog INSERT → UC1 복귀
         if uc2_result and uc2_result.get("consensus_reached"):
             consensus_score = uc2_result.get("consensus_score", 0.0)
             logger.info(
                 f"[Supervisor] ✅ UC2 consensus reached (score={consensus_score:.2f}) "
-                f"→ Return to UC1 with new selectors"
+                f"→ Updating Selector → Return to UC1"
             )
+
+            # DB 저장 로직
+            try:
+                from src.storage.database import get_db
+                from src.storage.models import Selector, DecisionLog
+
+                db = next(get_db())
+
+                # 1. Selector UPDATE
+                proposed_selectors = uc2_result.get("proposed_selectors", {})
+                if proposed_selectors:
+                    selector = db.query(Selector).filter(Selector.site_name == state["site_name"]).first()
+                    if selector:
+                        # 기존 Selector 업데이트
+                        selector.title_selector = proposed_selectors.get("title_selector", selector.title_selector)
+                        selector.body_selector = proposed_selectors.get("body_selector", selector.body_selector)
+                        selector.date_selector = proposed_selectors.get("date_selector", selector.date_selector)
+                        selector.updated_at = datetime.utcnow()
+                        logger.info(f"[Supervisor] 📝 Selector updated for {state['site_name']}")
+                    else:
+                        # Selector가 없으면 새로 생성 (UC2가 실행되었다는 것은 selector가 있어야 하지만 방어 로직)
+                        new_selector = Selector(
+                            site_name=state["site_name"],
+                            title_selector=proposed_selectors.get("title_selector", ""),
+                            body_selector=proposed_selectors.get("body_selector", ""),
+                            date_selector=proposed_selectors.get("date_selector", ""),
+                            site_type="ssr"
+                        )
+                        db.add(new_selector)
+                        logger.info(f"[Supervisor] ➕ New Selector created for {state['site_name']}")
+
+                # 2. DecisionLog INSERT
+                decision_log = DecisionLog(
+                    url=state["url"],
+                    site_name=state["site_name"],
+                    gpt_analysis=uc2_result.get("gpt_analysis"),
+                    gemini_validation=uc2_result.get("gemini_validation"),
+                    consensus_reached=True,
+                    retry_count=uc2_result.get("retry_count", 0),
+                    created_at=datetime.utcnow()
+                )
+                db.add(decision_log)
+
+                db.commit()
+                logger.info(f"[Supervisor] 💾 DecisionLog saved: UC2 consensus reached (score={consensus_score:.2f})")
+
+            except Exception as e:
+                logger.error(f"[Supervisor] ❌ Failed to save UC2 results to DB: {e}")
+                # DB 저장 실패해도 워크플로우는 계속 진행
+
             return Command(
                 update={
                     "current_uc": "uc1",
                     "next_action": "uc1",
                     "failure_count": 0,  # 실패 카운터 리셋
-                    "workflow_history": history + [f"supervisor → uc1_validation (UC2 consensus {consensus_score:.2f})"]
+                    "workflow_history": history + [f"supervisor → SELECTOR_UPDATED → uc1_validation (UC2 consensus {consensus_score:.2f})"]
                 },
                 goto="uc1_validation"
             )
 
-        # UC2 합의 실패 → DecisionLog 생성 후 종료 (PoC: 관리자가 DB 확인)
+        # UC2 합의 실패 → DecisionLog INSERT 후 종료 (관리자 수동 확인 필요)
         else:
             consensus_score = uc2_result.get("consensus_score", 0.0) if uc2_result else 0.0
             logger.warning(
                 f"[Supervisor] ❌ UC2 consensus failed (score={consensus_score:.2f}) "
-                f"→ Workflow END (DecisionLog created)"
+                f"→ Saving DecisionLog → Workflow END"
             )
+
+            # DB 저장 로직 (실패 케이스도 기록)
+            try:
+                from src.storage.database import get_db
+                from src.storage.models import DecisionLog, Selector
+                from datetime import datetime
+
+                db = next(get_db())
+
+                # DecisionLog INSERT (실패 케이스)
+                decision_log = DecisionLog(
+                    url=state["url"],
+                    site_name=state["site_name"],
+                    gpt_analysis=uc2_result.get("gpt_analysis") if uc2_result else None,
+                    gemini_validation=uc2_result.get("gemini_validation") if uc2_result else None,
+                    consensus_reached=False,
+                    retry_count=uc2_result.get("retry_count", 0) if uc2_result else 0,
+                    created_at=datetime.utcnow()
+                )
+                db.add(decision_log)
+
+                # Selector failure_count 증가
+                selector = db.query(Selector).filter(Selector.site_name == state["site_name"]).first()
+                if selector:
+                    selector.failure_count += 1
+                    logger.info(f"[Supervisor] 📉 Selector failure_count incremented: {state['site_name']}")
+
+                db.commit()
+                logger.info(f"[Supervisor] 💾 DecisionLog saved: UC2 consensus failed (score={consensus_score:.2f})")
+
+            except Exception as e:
+                logger.error(f"[Supervisor] ❌ Failed to save UC2 failure to DB: {e}")
+
             return Command(
                 update={
                     "next_action": "end",
-                    "workflow_history": history + [f"supervisor → END (UC2 consensus failed {consensus_score:.2f})"]
+                    "error_message": f"UC2 consensus failed (score={consensus_score:.2f})",
+                    "workflow_history": history + [f"supervisor → DECISION_LOG_SAVED → END (UC2 consensus failed {consensus_score:.2f})"]
                 },
                 goto=END
             )
@@ -346,28 +533,71 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
     if current_uc == "uc3":
         uc3_result = state.get("uc3_discovery_result")
 
-        # UC3 성공 → 종료 (새로운 사이트 Selector가 DB에 저장됨)
+        # UC3 성공 → Selector INSERT → 종료
         if uc3_result and uc3_result.get("selectors_discovered"):
             confidence = uc3_result.get("confidence", 0.0)
             logger.info(
                 f"[Supervisor] ✅ UC3 new site discovered (confidence={confidence:.2f}) "
-                f"→ Workflow END"
+                f"→ Saving Selector to DB → Workflow END"
             )
+
+            # DB 저장 로직
+            try:
+                from src.storage.database import get_db
+                from src.storage.models import Selector
+                from datetime import datetime
+
+                db = next(get_db())
+
+                # Selector INSERT
+                discovered_selectors = uc3_result.get("selectors_discovered", {})
+                if discovered_selectors:
+                    # 기존 Selector가 있는지 확인 (중복 방지)
+                    existing_selector = db.query(Selector).filter(Selector.site_name == state["site_name"]).first()
+                    if existing_selector:
+                        logger.warning(f"[Supervisor] Selector already exists for {state['site_name']}, updating instead")
+                        existing_selector.title_selector = discovered_selectors.get("title_selector", "")
+                        existing_selector.body_selector = discovered_selectors.get("body_selector", "")
+                        existing_selector.date_selector = discovered_selectors.get("date_selector", "")
+                        existing_selector.updated_at = datetime.utcnow()
+                        logger.info(f"[Supervisor] 📝 Existing Selector updated for {state['site_name']}")
+                    else:
+                        # 새로운 Selector 생성
+                        new_selector = Selector(
+                            site_name=state["site_name"],
+                            title_selector=discovered_selectors.get("title_selector", ""),
+                            body_selector=discovered_selectors.get("body_selector", ""),
+                            date_selector=discovered_selectors.get("date_selector", ""),
+                            site_type="ssr",
+                            success_count=0,
+                            failure_count=0
+                        )
+                        db.add(new_selector)
+                        logger.info(f"[Supervisor] ➕ New Selector created for {state['site_name']}")
+
+                    db.commit()
+                    logger.info(f"[Supervisor] 💾 Selector saved: UC3 discovery (confidence={confidence:.2f})")
+
+            except Exception as e:
+                logger.error(f"[Supervisor] ❌ Failed to save UC3 Selector to DB: {e}")
+
             return Command(
                 update={
                     "next_action": "end",
-                    "workflow_history": history + [f"supervisor → END (UC3 success {confidence:.2f})"]
+                    "workflow_history": history + [f"supervisor → SELECTOR_SAVED → END (UC3 success {confidence:.2f})"]
                 },
                 goto=END
             )
 
         # UC3 실패 → 종료
         else:
-            logger.warning("[Supervisor] ❌ UC3 failed → Workflow END")
+            confidence = uc3_result.get("confidence", 0.0) if uc3_result else 0.0
+            logger.warning(f"[Supervisor] ❌ UC3 failed (confidence={confidence:.2f}) → Workflow END")
             return Command(
                 update={
                     "next_action": "end",
-                    "workflow_history": history + ["supervisor → END (UC3 failed)"]
+                    "error_message": f"UC3 new site discovery failed (confidence={confidence:.2f} < 0.7)",
+                    "workflow_history": history + [f"supervisor → END (UC3 failed, confidence={confidence:.2f})"]
                 },
                 goto=END
             )
@@ -446,6 +676,41 @@ def supervisor_llm_node(state: MasterCrawlState) -> Command[Literal["uc1_validat
     # State 분석
     current_uc = state.get("current_uc")
     workflow_history = state.get("workflow_history", [])
+
+    # ========================================================================
+    # Phase 1 Safety Enhancement 2: Loop Detection
+    # ========================================================================
+    # LLM 호출 전에 루프를 감지하여 API 비용과 지연 시간 절약
+    # 예: UC1→UC1→UC1 (3회 반복) 시 워크플로우 즉시 종료
+
+    loop_detected, loop_pattern = detect_routing_loop(workflow_history, max_repeats=MAX_LOOP_REPEATS)
+
+    if loop_detected:
+        logger.error(
+            f"[Supervisor LLM] 🔁 라우팅 루프 감지: {loop_pattern}"
+        )
+        logger.error(
+            f"[Supervisor LLM] 📊 워크플로우 히스토리 (최근 10개): {workflow_history[-10:]}"
+        )
+        logger.warning(
+            f"[Supervisor LLM] 🛑 무한 루프 방지를 위해 워크플로우 종료"
+        )
+
+        # 루프 감지 시 즉시 END로 이동
+        return Command(
+            update={
+                "error_message": f"라우팅 루프 감지: {loop_pattern}. 동일한 UC를 {MAX_LOOP_REPEATS}회 이상 반복했습니다.",
+                "workflow_history": workflow_history + [
+                    f"supervisor_llm → END (루프 감지: {loop_pattern})"
+                ],
+                "next_action": "end",
+                "supervisor_reasoning": f"루프 감지로 인한 강제 종료: {loop_pattern}",
+                "supervisor_confidence": 0.0  # 시스템 강제 종료이므로 confidence 없음
+            },
+            goto=END
+        )
+
+    logger.debug(f"[Supervisor LLM] ✅ 루프 감지 통과 (history 길이: {len(workflow_history)})")
 
     # LLM에 전달할 컨텍스트 구성
     context = {
@@ -545,6 +810,36 @@ Your job is to analyze the current state and decide the next action.
         logger.info(f"[Supervisor LLM] 🎯 Decision: {next_action} (confidence={confidence:.2f})")
         logger.info(f"[Supervisor LLM] 💭 Reasoning: {reasoning}")
 
+        # ====================================================================
+        # Phase 1 Safety Enhancement 1: Confidence Threshold Validation
+        # ====================================================================
+        # LLM의 신뢰도가 최소 임계값(0.6)을 충족하는지 검증
+        # UC2 consensus threshold와 동일한 기준 적용 (일관성 유지)
+
+        confidence_valid, confidence_error = validate_confidence_threshold(
+            confidence=confidence,
+            threshold=MIN_CONFIDENCE_THRESHOLD
+        )
+
+        if not confidence_valid:
+            logger.warning(
+                f"[Supervisor LLM] ⚠️ 낮은 신뢰도 감지: {confidence:.2f} < {MIN_CONFIDENCE_THRESHOLD}"
+            )
+            logger.warning(
+                f"[Supervisor LLM] 🔄 낮은 신뢰도로 인해 rule-based supervisor로 fallback"
+            )
+            logger.info(
+                f"[Supervisor LLM] 💭 LLM reasoning (거부됨): {reasoning}"
+            )
+            logger.info(
+                f"[Supervisor LLM] 📊 거부 사유: {confidence_error}"
+            )
+
+            # Rule-based supervisor로 fallback
+            return supervisor_node(state)
+
+        logger.debug(f"[Supervisor LLM] ✅ 신뢰도 검증 통과: {confidence:.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
+
         # 라우팅 매핑
         routing_map = {
             "uc1_validation": "uc1_validation",
@@ -554,6 +849,37 @@ Your job is to analyze the current state and decide the next action.
         }
 
         goto_target = routing_map.get(next_action, END)
+
+        # ====================================================================
+        # Phase 1 Safety Enhancement 3: State Constraint Validation
+        # ====================================================================
+        # LLM이 제안한 상태 전이가 비즈니스 로직 규칙을 따르는지 검증
+        # 예: UC3 → UC1 (불가능), UC1 → UC1 (self-loop 불가능)
+
+        transition_valid, transition_error = validate_state_transition(
+            current_uc=current_uc,
+            next_action=next_action,
+            state=state
+        )
+
+        if not transition_valid:
+            logger.error(
+                f"[Supervisor LLM] ❌ 잘못된 상태 전이: {current_uc} → {next_action}"
+            )
+            logger.error(
+                f"[Supervisor LLM] 🚫 거부 사유: {transition_error}"
+            )
+            logger.warning(
+                f"[Supervisor LLM] 🔄 잘못된 전이로 인해 rule-based supervisor로 fallback"
+            )
+            logger.info(
+                f"[Supervisor LLM] 💭 LLM reasoning (거부됨): {reasoning}"
+            )
+
+            # Rule-based supervisor로 fallback
+            return supervisor_node(state)
+
+        logger.debug(f"[Supervisor LLM] ✅ 상태 전이 검증 통과: {current_uc} → {next_action}")
 
         # State 업데이트
         update_dict = {
@@ -763,6 +1089,9 @@ def uc1_validation_node(state: MasterCrawlState) -> Command[Literal["supervisor"
         return Command(
             update={
                 "quality_passed": quality_passed,  # Supervisor가 확인하는 플래그
+                "extracted_title": title,  # 전체 제목 (DB 저장용)
+                "extracted_body": body,  # 전체 본문 (DB 저장용)
+                "extracted_date": date_str,  # 전체 날짜 (DB 저장용)
                 "uc1_validation_result": uc1_validation_result if uc1_validation_result else {
                     "quality_passed": quality_passed,
                     "quality_score": quality_score,
@@ -770,7 +1099,7 @@ def uc1_validation_node(state: MasterCrawlState) -> Command[Literal["supervisor"
                     "missing_fields": uc1_result.get("missing_fields", []),
                     "extracted_data": {
                         "title": title,
-                        "body": body[:500] if body else "",  # 첫 500자만 저장
+                        "body": body[:500] if body else "",  # 첫 500자만 저장 (preview용)
                         "date": date_str
                     }
                 },

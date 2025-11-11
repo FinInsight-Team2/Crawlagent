@@ -204,5 +204,66 @@ class DecisionLog(Base):
         )
 
 
+class CostMetric(Base):
+    """
+    LLM API 비용 추적 테이블
+
+    OpenAI, Gemini, Claude 등 LLM API 호출 비용을 실시간으로 추적합니다.
+    - UC1/UC2/UC3 각각의 비용을 분리 추적
+    - 토큰 사용량 + 비용 계산
+    - 일일/월간 집계 지원
+    """
+
+    __tablename__ = "cost_metrics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(TIMESTAMP, default=datetime.utcnow, nullable=False, index=True)
+
+    # API Provider (openai, gemini, claude)
+    provider = Column(
+        String(20),
+        CheckConstraint("provider IN ('openai', 'gemini', 'claude')"),
+        nullable=False,
+        index=True
+    )
+
+    # Model Name (gpt-4o-mini, gemini-2.5-pro, claude-3-5-sonnet)
+    model = Column(String(50), nullable=False, index=True)
+
+    # Use Case (uc1, uc2, uc3)
+    use_case = Column(
+        String(10),
+        CheckConstraint("use_case IN ('uc1', 'uc2', 'uc3', 'other')"),
+        nullable=False,
+        index=True
+    )
+
+    # Token Usage
+    input_tokens = Column(Integer, default=0, nullable=False)
+    output_tokens = Column(Integer, default=0, nullable=False)
+    total_tokens = Column(Integer, default=0, nullable=False)
+
+    # Cost (USD)
+    input_cost = Column(Float, default=0.0, nullable=False)  # Input cost in USD
+    output_cost = Column(Float, default=0.0, nullable=False)  # Output cost in USD
+    total_cost = Column(Float, default=0.0, nullable=False)  # Total cost in USD
+
+    # Context (optional metadata)
+    url = Column(Text, nullable=True)  # Associated URL (if applicable)
+    site_name = Column(String(100), nullable=True, index=True)  # Associated site
+    workflow_run_id = Column(String(50), nullable=True, index=True)  # LangSmith run ID
+
+    # Extra context (JSONB for flexible storage - 'metadata' is reserved in SQLAlchemy)
+    extra_data = Column(JSONB, nullable=True, comment="Additional context (prompt length, response time, etc.)")
+
+    def __repr__(self) -> str:
+        return (
+            f"<CostMetric(provider='{self.provider}', "
+            f"model='{self.model}', "
+            f"use_case='{self.use_case}', "
+            f"cost=${self.total_cost:.6f})>"
+        )
+
+
 # 모든 모델을 외부에서 import할 수 있도록 export
-__all__ = ["Base", "Selector", "CrawlResult", "DecisionLog"]
+__all__ = ["Base", "Selector", "CrawlResult", "DecisionLog", "CostMetric"]

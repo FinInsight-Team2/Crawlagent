@@ -1243,11 +1243,11 @@ def gemini_validate_agent_node(state: UC3State) -> dict:
     logger.info("[UC3 Agent 2] Gemini Validator 시작")
     logger.info(f"[UC3 Agent 2] GPT Proposal: {gpt_proposal}")
 
-    # Simplified approach: Use Gemini 2.5 Flash (stable paid tier)
+    # Simplified approach: Use Gemini 2.5 Pro (stable paid tier, higher quality)
 
     try:
         gemini_llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.5-pro",
             temperature=0,
             google_api_key=os.getenv("GOOGLE_API_KEY")
         )

@@ -407,8 +407,10 @@ def gemini_validate_node(state: HITLState) -> HITLState:
                 extraction_success[field] = False
 
         # 3. Gemini에게 검증 요청
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        # gemini-2.5-pro: 유료 티어 최고 품질 모델 (더 정확한 검증)
+        # gemini-2.5-flash: 유료 티어 빠른 모델 (quota 제한 없음)
+        model = genai.GenerativeModel("gemini-2.5-pro")
 
         validation_prompt = f"""
 You are a web scraping validator. Evaluate the following CSS selector proposal.
