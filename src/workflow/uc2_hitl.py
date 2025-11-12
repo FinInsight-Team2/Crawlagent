@@ -1,6 +1,7 @@
 """
 CrawlAgent - UC2 HITL (Human-in-the-Loop) Workflow
 Created: 2025-11-05
+Updated: 2025-11-12 (Few-Shot Examples 추가)
 
 LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
 - GPT-4o-mini: CSS Selector 제안 (Proposer)
@@ -18,6 +19,7 @@ LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
 UC2는 "Multi-Agent Consensus + HITL" 패턴을 사용합니다.
 
 1. GPT Propose Node (gpt_propose_node):
+   - Few-Shot Examples 참조 (DB의 성공 패턴)
    - HTML을 분석해서 title, body, date의 CSS Selector 제안
    - confidence score와 reasoning 포함
    - 출력: gpt_proposal 추가된 State
@@ -121,7 +123,7 @@ from openai import OpenAI
 
 def gpt_propose_node(state: HITLState) -> HITLState:
     """
-    GPT-4o-mini가 CSS Selector를 제안하는 Node
+    GPT-4o-mini가 CSS Selector를 제안하는 Node (Few-Shot Examples 포함)
 
     LangGraph Node 규칙:
     1. 입력: state (HITLState)
@@ -129,24 +131,38 @@ def gpt_propose_node(state: HITLState) -> HITLState:
     3. state를 직접 수정하지 않고, 새로운 dict를 반환
 
     동작:
+    - Few-Shot Examples 참조 (DB의 성공 패턴)
     - HTML을 분석해서 title, body, date의 CSS Selector 제안
     - confidence score와 reasoning 포함
     """
     logger.info(f"[GPT Propose Node] Starting for {state['url']}")
 
     try:
+        # Few-Shot Retriever import
+        from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+
         # OpenAI 클라이언트 초기화
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-        # HTML 샘플 추출 (처음 5000자만 사용 - 토큰 절약)
-        html_sample = state.get("html_content", "")[:5000]
+        # HTML 샘플 추출 (20000자로 증가)
+        html_sample = state.get("html_content", "")[:20000]
 
-        # GPT 프롬프트
+        # Few-Shot Examples 가져오기
+        few_shot_examples = get_few_shot_examples(limit=5)
+        few_shot_section = ""
+        if few_shot_examples and len(few_shot_examples) > 0:
+            few_shot_section = "## Few-Shot Examples (성공한 뉴스 사이트 패턴)\n\n"
+            few_shot_section += format_few_shot_prompt(few_shot_examples, include_patterns=True)
+            few_shot_section += "\n"
+
+        # GPT 프롬프트 (Few-Shot 포함)
         prompt = f"""
 You are an expert web scraper. Analyze the following HTML and propose CSS selectors.
 
+{few_shot_section}
+
 URL: {state['url']}
-HTML Sample (first 5000 chars):
+HTML Sample (first 20000 chars):
 ```html
 {html_sample}
 ```
@@ -155,6 +171,8 @@ Task: Propose CSS selectors for:
 1. Article title
 2. Article body/content
 3. Publication date
+
+Refer to the Few-Shot examples above for successful patterns.
 
 Return ONLY a JSON object with this structure:
 {{
@@ -252,11 +270,11 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
 
     if not body_success or not body:
         body_quality = 0.0
-    elif len(body) >= 500:
-        body_quality = 1.0  # 충분한 본문 (5W1H 기준 500자 이상)
     elif len(body) >= 200:
-        body_quality = 0.7  # 중간 길이
+        body_quality = 1.0  # 충분한 본문 (완화: 200자 이상)
     elif len(body) >= 100:
+        body_quality = 0.7  # 중간 길이
+    elif len(body) >= 50:
         body_quality = 0.4  # 짧은 본문
     else:
         body_quality = 0.1  # 너무 짧음 (거의 실패)
@@ -475,19 +493,19 @@ Criteria:
             extraction_quality
         )
 
-        # 4-3. 합의 여부 판단 (3-tier system)
-        if consensus_score >= 0.8:
+        # 4-3. 합의 여부 판단 (3-tier system, 완화됨)
+        if consensus_score >= 0.7:
             consensus_reached = True
-            logger.info(f"[Consensus] ✅ AUTO-APPROVED (score={consensus_score:.2f} >= 0.8)")
-        elif consensus_score >= 0.6:
+            logger.info(f"[Consensus] ✅ AUTO-APPROVED (score={consensus_score:.2f} >= 0.7)")
+        elif consensus_score >= 0.5:
             consensus_reached = True
             logger.warning(
-                f"[Consensus] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f} >= 0.6) "
+                f"[Consensus] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f} >= 0.5) "
                 f"- Medium confidence, monitoring recommended"
             )
         else:
             consensus_reached = False
-            logger.warning(f"[Consensus] ❌ REJECTED (score={consensus_score:.2f} < 0.6) - Human Review needed")
+            logger.warning(f"[Consensus] ❌ REJECTED (score={consensus_score:.2f} < 0.5) - Human Review needed")
 
         # 5. next_action 결정
         if consensus_reached:

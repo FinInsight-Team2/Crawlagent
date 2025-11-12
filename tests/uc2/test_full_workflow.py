@@ -53,7 +53,7 @@ def initial_state(test_url, test_html_content):
 @pytest.mark.slow
 def test_langgraph_workflow_execution(compiled_app, initial_state):
     """LangGraph 전체 워크플로우 실행 테스트"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # LangGraph 실행
     final_state = compiled_app.invoke(initial_state)
@@ -78,7 +78,7 @@ def test_langgraph_workflow_execution(compiled_app, initial_state):
 @pytest.mark.slow
 def test_workflow_consensus_reached(compiled_app, initial_state):
     """Consensus 도달 케이스 검증"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     final_state = compiled_app.invoke(initial_state)
 
@@ -117,7 +117,7 @@ def test_workflow_consensus_reached(compiled_app, initial_state):
 @pytest.mark.slow
 def test_workflow_retry_logic(compiled_app, initial_state):
     """Retry 로직 검증"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     final_state = compiled_app.invoke(initial_state)
 
@@ -142,7 +142,7 @@ def test_workflow_retry_logic(compiled_app, initial_state):
 @pytest.mark.slow
 def test_workflow_state_transitions(compiled_app, initial_state):
     """State 전환 검증"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     final_state = compiled_app.invoke(initial_state)
 
@@ -166,7 +166,7 @@ def test_workflow_state_transitions(compiled_app, initial_state):
 @pytest.mark.slow
 def test_workflow_result_structure(compiled_app, initial_state):
     """워크플로우 결과 구조 검증"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     final_state = compiled_app.invoke(initial_state)
 
@@ -196,7 +196,7 @@ def test_workflow_result_structure(compiled_app, initial_state):
 @pytest.mark.slow
 def test_workflow_handles_api_errors_gracefully(compiled_app, test_url):
     """API 에러 처리 테스트"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # 빈 HTML로 State 생성 (에러 유발 가능)
     invalid_state: HITLState = {

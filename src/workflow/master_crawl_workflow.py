@@ -556,18 +556,20 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
                     existing_selector = db.query(Selector).filter(Selector.site_name == state["site_name"]).first()
                     if existing_selector:
                         logger.warning(f"[Supervisor] Selector already exists for {state['site_name']}, updating instead")
-                        existing_selector.title_selector = discovered_selectors.get("title_selector", "")
-                        existing_selector.body_selector = discovered_selectors.get("body_selector", "")
-                        existing_selector.date_selector = discovered_selectors.get("date_selector", "")
+                        # UC3는 title/body/date 키로 반환, title_selector/body_selector/date_selector도 fallback 지원
+                        existing_selector.title_selector = discovered_selectors.get("title", discovered_selectors.get("title_selector", ""))
+                        existing_selector.body_selector = discovered_selectors.get("body", discovered_selectors.get("body_selector", ""))
+                        existing_selector.date_selector = discovered_selectors.get("date", discovered_selectors.get("date_selector", ""))
                         existing_selector.updated_at = datetime.utcnow()
                         logger.info(f"[Supervisor] 📝 Existing Selector updated for {state['site_name']}")
                     else:
                         # 새로운 Selector 생성
+                        # UC3는 title/body/date 키로 반환, title_selector/body_selector/date_selector도 fallback 지원
                         new_selector = Selector(
                             site_name=state["site_name"],
-                            title_selector=discovered_selectors.get("title_selector", ""),
-                            body_selector=discovered_selectors.get("body_selector", ""),
-                            date_selector=discovered_selectors.get("date_selector", ""),
+                            title_selector=discovered_selectors.get("title", discovered_selectors.get("title_selector", "")),
+                            body_selector=discovered_selectors.get("body", discovered_selectors.get("body_selector", "")),
+                            date_selector=discovered_selectors.get("date", discovered_selectors.get("date_selector", "")),
                             site_type="ssr",
                             success_count=0,
                             failure_count=0
@@ -1271,7 +1273,8 @@ def uc3_new_site_node(state: MasterCrawlState) -> Command[Literal["supervisor"]]
 
         # 4. 결과 분석
         discovered_selectors = uc3_result.get("discovered_selectors")
-        confidence = uc3_result.get("confidence", 0.0)
+        # UC3는 consensus_score를 반환, confidence도 fallback 지원
+        confidence = uc3_result.get("consensus_score", uc3_result.get("confidence", 0.0))
 
         logger.info(
             f"[UC3 Node] ✅ Discovery completed: "

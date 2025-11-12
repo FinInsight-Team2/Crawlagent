@@ -44,16 +44,18 @@ from functools import partial
 # LangChain imports for Tools and Agents
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.tools.tavily_search import TavilySearchResults
+# Tavily removed - using Few-Shot Examples instead
+# from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
+from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
 
-# Firecrawl
-try:
-    from firecrawl import FirecrawlApp
-except ImportError:
-    logger.warning("firecrawl-py not installed. UC3 Firecrawl tool will be disabled.")
-    FirecrawlApp = None
+# Firecrawl removed - using simple preprocess_html instead
+# try:
+#     from firecrawl import FirecrawlApp
+# except ImportError:
+#     logger.warning("firecrawl-py not installed. UC3 Firecrawl tool will be disabled.")
+#     FirecrawlApp = None
 
 from src.storage.database import get_db
 from src.storage.models import Selector
@@ -139,9 +141,9 @@ class UC3State(TypedDict, total=False):
     next_action: Literal["save", "refine", "human_review"]
 
     # === NEW: 3-Tool Results ===
-    tavily_results: dict
+    # tavily_results: dict  # REMOVED - not needed anymore
     """
-    Tavily Web Search Tool 결과
+    Tavily Web Search Tool - REMOVED (replaced by Few-Shot Examples)
     {
         "success": True/False,
         "results": [...],
@@ -150,9 +152,9 @@ class UC3State(TypedDict, total=False):
     }
     """
 
-    firecrawl_results: dict
+    # firecrawl_results: dict  # REMOVED - not needed
     """
-    Firecrawl HTML Preprocessing Tool 결과
+    Firecrawl HTML Preprocessing Tool - REMOVED (too expensive, using simple preprocess)
     {
         "success": True/False,
         "html": "...",
@@ -277,6 +279,14 @@ def preprocess_html(raw_html: str) -> str:
     """
     soup = BeautifulSoup(raw_html, 'html.parser')
 
+    # 0. head 태그 먼저 백업 (meta 정보 보존)
+    head_tag = soup.find('head')
+    if head_tag:
+        # head 태그 복사본 생성 (script/style 제거 전)
+        head_backup = str(head_tag)
+    else:
+        head_backup = None
+
     # 1. 불필요한 태그 제거
     for tag in soup(['script', 'style', 'svg', 'iframe', 'noscript', 'footer', 'nav']):
         tag.decompose()
@@ -293,7 +303,11 @@ def preprocess_html(raw_html: str) -> str:
     )
 
     if main_content:
-        result = str(main_content)
+        # head 백업과 main 결합
+        if head_backup:
+            result = head_backup + str(main_content)
+        else:
+            result = str(main_content)
     else:
         result = str(soup)
 
@@ -663,9 +677,9 @@ def save_selectors_node(state: UC3State) -> dict:
 
         if existing:
             # 업데이트
-            existing.title_selector = discovered_selectors.get("title", "")
-            existing.body_selector = discovered_selectors.get("body", "")
-            existing.date_selector = discovered_selectors.get("date", "")
+            existing.title_selector = discovered_selectors.get("title", discovered_selectors.get("title_selector", ""))
+            existing.body_selector = discovered_selectors.get("body", discovered_selectors.get("body_selector", ""))
+            existing.date_selector = discovered_selectors.get("date", discovered_selectors.get("date_selector", ""))
             existing.site_type = "ssr"  # default
 
             logger.info(f"[UC3] Selector 업데이트: site={site_name}")
@@ -673,9 +687,9 @@ def save_selectors_node(state: UC3State) -> dict:
             # 신규 생성
             selector = Selector(
                 site_name=site_name,
-                title_selector=discovered_selectors.get("title", ""),
-                body_selector=discovered_selectors.get("body", ""),
-                date_selector=discovered_selectors.get("date", ""),
+                title_selector=discovered_selectors.get("title", discovered_selectors.get("title_selector", "")),
+                body_selector=discovered_selectors.get("body", discovered_selectors.get("body_selector", "")),
+                date_selector=discovered_selectors.get("date", discovered_selectors.get("date_selector", "")),
                 site_type="ssr"  # default
             )
             db.add(selector)
@@ -811,99 +825,41 @@ def tavily_search_node(state: UC3State) -> dict:
 
 # --- Tool 2: Firecrawl Preprocessing ---
 
-def firecrawl_preprocess_node(state: UC3State) -> dict:
+def simple_preprocess_node(state: UC3State) -> dict:
     """
-    Tool 2: Firecrawl HTML Preprocessing - HTML 전처리 (토큰 90% 감소)
+    Simple HTML Preprocessing - Firecrawl 대체 (비용 절감)
 
     목적:
-        Firecrawl API를 사용하여 HTML에서 주요 콘텐츠만 추출하고
-        광고, 내비게이션, 사이드바 등을 제거하여 토큰을 90% 감소시킵니다.
-
-    기능:
-        - onlyMainContent: True (메인 콘텐츠만 추출)
-        - formats: ['html', 'markdown'] (HTML + Markdown 모두 제공)
-        - waitFor: 2000ms (SSR 대응)
+        기존 preprocess_html 함수를 사용하여 HTML 정리
+        - Script/Style 태그 제거
+        - 주석 제거
+        - 공백 정리
 
     출력:
-        firecrawl_results: {
-            "success": True/False,
-            "html": "...",
-            "markdown": "...",
-            "metadata": {...},
-            "original_tokens": 50000,
-            "reduced_tokens": 5000
-        }
+        preprocessed_html: 정리된 HTML (raw_html 업데이트)
     """
-    url = state.get("url")
     raw_html = state.get("raw_html", "")
 
-    logger.info(f"[UC3 Tool 2] Firecrawl Preprocessing 시작: {url}")
+    logger.info(f"[UC3 Preprocess] Simple HTML preprocessing 시작")
 
     try:
-        firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY")
-        if not firecrawl_api_key or FirecrawlApp is None:
-            logger.warning("[UC3 Tool 2] Firecrawl not available. Using fallback preprocessing.")
-            # Fallback: 기존 preprocess_html 사용
-            preprocessed = preprocess_html(raw_html)
-            return {
-                **state,
-                "firecrawl_results": {
-                    "success": False,
-                    "html": preprocessed,
-                    "error": "Firecrawl not configured, used fallback",
-                    "original_tokens": len(raw_html) // 4,
-                    "reduced_tokens": len(preprocessed) // 4
-                }
-            }
+        # 기존 preprocess_html 함수 사용 (무료, 빠름)
+        preprocessed = preprocess_html(raw_html)
 
-        firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
+        original_size = len(raw_html)
+        reduced_size = len(preprocessed)
+        reduction_rate = (1 - reduced_size / original_size) * 100 if original_size > 0 else 0
 
-        # Firecrawl v2 API - keyword arguments로 전달 (params 사용 안 함)
-        result = firecrawl.scrape(
-            url,
-            formats=['html', 'markdown'],
-            only_main_content=True,
-            wait_for=2000,  # SSR 대응
-            timeout=30000
-        )
-
-        # Firecrawl v2 returns Document object
-        cleaned_html = result.html if hasattr(result, 'html') else result.get('html', '')
-        cleaned_markdown = result.markdown if hasattr(result, 'markdown') else result.get('markdown', '')
-        metadata = result.metadata if hasattr(result, 'metadata') else result.get('metadata', {})
-
-        original_tokens = len(raw_html) // 4
-        reduced_tokens = len(cleaned_html) // 4
-        reduction_rate = (1 - reduced_tokens / original_tokens) * 100 if original_tokens > 0 else 0
-
-        logger.info(f"[UC3 Tool 2] ✅ Firecrawl 완료: {original_tokens} → {reduced_tokens} tokens ({reduction_rate:.1f}% 감소)")
+        logger.info(f"[UC3 Preprocess] ✅ 완료: {original_size} → {reduced_size} chars ({reduction_rate:.1f}% 감소)")
 
         return {
             **state,
-            "firecrawl_results": {
-                "success": True,
-                "html": cleaned_html,
-                "markdown": cleaned_markdown,
-                "metadata": metadata,
-                "original_tokens": original_tokens,
-                "reduced_tokens": reduced_tokens
-            }
+            "raw_html": preprocessed  # raw_html 업데이트
         }
 
     except Exception as e:
-        logger.error(f"[UC3 Tool 2] Firecrawl failed: {e}")
-        # Fallback
-        preprocessed = preprocess_html(raw_html)
-        return {
-            **state,
-            "firecrawl_results": {
-                "success": False,
-                "html": preprocessed,
-                "error": str(e),
-                "original_tokens": len(raw_html) // 4,
-                "reduced_tokens": len(preprocessed) // 4
-            }
-        }
+        logger.error(f"[UC3 Preprocess] Preprocessing failed: {e}")
+        return state  # 실패 시 원본 HTML 유지
 
 
 # --- Tool 3: Beautiful Soup DOM Analyzer ---
@@ -931,29 +887,69 @@ def analyze_dom_patterns(html: str) -> dict:
     """
     soup = BeautifulSoup(html, 'html.parser')
 
-    # 1. 제목 후보 (H1/H2/H3 태그, 10-200자)
+    # 1. 제목 후보 (H1/H2/H3/H4 태그, meta title, 5-500자로 확장)
     title_candidates = []
-    for tag in soup.find_all(['h1', 'h2', 'h3']):
+
+    # 1-1. Heading 태그 검색 (h1 ~ h4)
+    for tag in soup.find_all(['h1', 'h2', 'h3', 'h4']):
         # h2/h3 내부의 span도 체크 (네이버 뉴스 패턴)
         span = tag.find('span')
         text = span.get_text(strip=True) if span else tag.get_text(strip=True)
 
-        if 10 <= len(text) <= 200:
+        # 길이 제한 완화: 5-500자 (기존 10-200자에서 확장)
+        if 5 <= len(text) <= 500:
             selector = generate_css_selector(tag)
 
             # ID나 특정 클래스가 있으면 신뢰도 상승
             has_id = tag.get('id') is not None
-            has_title_class = any(cls in tag.get('class', []) for cls in ['title', 'headline', 'head'])
+            has_title_class = any(cls in tag.get('class', []) for cls in ['title', 'headline', 'head', 'article', 'story'])
 
-            confidence = 0.9 if tag.name == 'h1' else (0.8 if tag.name == 'h2' else 0.6)
+            confidence = 0.95 if tag.name == 'h1' else (0.85 if tag.name == 'h2' else (0.7 if tag.name == 'h3' else 0.6))
             if has_id or has_title_class:
-                confidence += 0.1
+                confidence += 0.05
 
             title_candidates.append({
                 "selector": selector,
                 "text_preview": text[:50],
                 "tag_name": tag.name,
                 "confidence": min(1.0, confidence)
+            })
+
+    # 1-2. Meta 태그 검색 (og:title, twitter:title)
+    # preprocess_html이 head 태그를 제거할 수 있으므로 원본 HTML이 필요하면 별도 처리
+    meta_title = soup.find('meta', property='og:title') or soup.find('meta', attrs={'name': 'twitter:title'})
+    if meta_title and meta_title.get('content'):
+        title_text = meta_title['content']
+        if 5 <= len(title_text) <= 500:
+            title_candidates.append({
+                "selector": "meta[property='og:title']",
+                "text_preview": title_text[:50],
+                "tag_name": "meta",
+                "confidence": 0.85  # Meta 태그는 높은 신뢰도
+            })
+
+    # 1-2-1. title 태그도 검색 (fallback)
+    title_tag = soup.find('title')
+    if title_tag:
+        title_text = title_tag.get_text(strip=True)
+        if 5 <= len(title_text) <= 500:
+            title_candidates.append({
+                "selector": "title",
+                "text_preview": title_text[:50],
+                "tag_name": "title",
+                "confidence": 0.75
+            })
+
+    # 1-3. 클래스 이름에 title/headline 포함된 div/span 검색
+    for tag in soup.find_all(['div', 'span'], class_=re.compile(r'(title|headline|heading)', re.I)):
+        text = tag.get_text(strip=True)
+        if 5 <= len(text) <= 500:
+            selector = generate_css_selector(tag)
+            title_candidates.append({
+                "selector": selector,
+                "text_preview": text[:50],
+                "tag_name": tag.name,
+                "confidence": 0.75
             })
 
     # 2. 본문 후보 (article, div, section 중 가장 긴 텍스트)
@@ -1016,10 +1012,10 @@ def beautifulsoup_analyze_node(state: UC3State) -> dict:
     Tool 3 Node: BeautifulSoup DOM 분석 노드
 
     Tool인 analyze_dom_patterns를 호출하여 DOM 구조를 분석합니다.
-    BeautifulSoup은 FULL HTML을 분석해야 하므로 raw_html을 사용합니다.
+    Preprocessed HTML을 사용하여 정확도를 높입니다 (script/style 제거됨).
     """
-    # IMPORTANT: BeautifulSoup은 전체 HTML 필요 (firecrawl_results는 토큰 축소됨)
-    html = state.get('raw_html', '')
+    # simple_preprocess 이후의 HTML 사용 (script/style 제거되어 더 정확)
+    html = state.get('raw_html', '')  # preprocessed HTML이 raw_html에 업데이트됨
 
     logger.info("[UC3 Tool 3] BeautifulSoup DOM Analysis 시작")
 
@@ -1053,14 +1049,15 @@ def beautifulsoup_analyze_node(state: UC3State) -> dict:
 
 def gpt_discover_agent_node(state: UC3State) -> dict:
     """
-    Agent 1: GPT-4o Proposer with 3 Tools
+    Agent 1: GPT-4o Proposer with Few-Shot Examples + Tools
 
     목적:
-        3개 Tool 결과를 종합하여 CSS 셀렉터를 제안합니다.
+        Few-Shot Examples와 Tool 결과를 종합하여 CSS 셀렉터를 제안합니다.
 
     Tools:
+        - Few-Shot Examples (DB의 성공 패턴)
         - Tavily Search Results (유사 사이트 패턴)
-        - Firecrawl HTML (전처리된 HTML)
+        - Raw HTML Sample (15000자)
         - BeautifulSoup Analysis (DOM 통계)
 
     출력:
@@ -1074,11 +1071,14 @@ def gpt_discover_agent_node(state: UC3State) -> dict:
         }
     """
     site_name = state.get("site_name", "unknown")
-    tavily_results = state.get("tavily_results", {})
-    firecrawl_results = state.get("firecrawl_results", {})
+    # tavily_results = state.get("tavily_results", {})  # REMOVED
+    raw_html = state.get("raw_html", "")  # Firecrawl 대신 raw_html 사용
     bs_analysis = state.get("beautifulsoup_analysis", {})
 
     logger.info(f"[UC3 Agent 1] GPT-4o Proposer 시작: {site_name}")
+
+    # Few-Shot Examples 가져오기
+    few_shot_examples = get_few_shot_examples(limit=5)
 
     # Simplified approach: GPT-4o directly analyzes tool results without agent framework
     # (Agent framework로 하면 복잡하므로 직접 LLM 호출)
@@ -1086,21 +1086,25 @@ def gpt_discover_agent_node(state: UC3State) -> dict:
     try:
         gpt_llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
+        # Few-Shot 섹션
+        few_shot_section = ""
+        if few_shot_examples and len(few_shot_examples) > 0:
+            few_shot_section = format_few_shot_prompt(few_shot_examples, include_patterns=True)
+
         prompt = f"""You are a CSS Selector discovery expert.
 
-You have 3 tool results to help you:
+{few_shot_section}
 
-1. **Tavily Search Results** (similar sites' selector patterns):
-{json.dumps(tavily_results, indent=2, ensure_ascii=False)[:1000]}
+You have the following tool results to help you:
 
-2. **Firecrawl Cleaned HTML** (preprocessed, main content only):
-{firecrawl_results.get('html', '')[:2000]}
+1. **Raw HTML Sample** (15000 chars from original HTML):
+{raw_html[:15000]}
 
-3. **BeautifulSoup DOM Analysis** (statistical candidates):
+2. **BeautifulSoup DOM Analysis** (statistical candidates):
 {json.dumps(bs_analysis.get('analysis', {}), indent=2, ensure_ascii=False)}
 
 **Task**:
-Generate CSS selectors for title, body, and date based on the above tool results.
+Generate CSS selectors for title, body, and date based on the above information.
 
 **Return JSON format**:
 {{
@@ -1113,9 +1117,9 @@ Generate CSS selectors for title, body, and date based on the above tool results
 }}
 
 **Guidelines**:
+- **PRIMARY**: Refer to the Few-Shot examples for successful patterns (most important!)
 - Prefer selectors from BeautifulSoup DOM analysis (they're statistically validated)
-- Use Tavily results as reference patterns
-- Use Firecrawl HTML to verify selector validity
+- Use the Raw HTML sample to verify selector validity
 - Provide clear reasoning for each selector choice
 """
 
@@ -1428,18 +1432,43 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
         extraction_quality * 0.4
     )
 
-    # UC3 threshold: 0.7 (UC2는 0.6)
-    consensus_reached = consensus_score >= 0.7
+    # UC3 threshold: 0.55 (완화됨, UC2는 0.5)
+    consensus_reached = consensus_score >= 0.55
 
     logger.info(f"[UC3 Consensus] GPT={gpt_conf:.2f}, Gemini={gemini_conf:.2f}, Extract={extraction_quality:.2f} → Score={consensus_score:.2f}")
-    logger.info(f"[UC3 Consensus] Threshold=0.7, Reached={consensus_reached}")
+    logger.info(f"[UC3 Consensus] Threshold=0.55, Reached={consensus_reached}")
+
+    # Gemini best_selectors 또는 GPT proposal에서 추출
+    best_selectors = None
+    if consensus_reached:
+        best_selectors = gemini_validation.get('best_selectors')
+
+        # Fallback: Gemini가 best_selectors를 반환하지 않으면 GPT proposal 사용
+        if not best_selectors:
+            gpt_proposal = state.get('gpt_proposal', {})
+            gpt_selectors = gpt_proposal.get('selectors', {})
+            if gpt_selectors:
+                best_selectors = {
+                    'title': gpt_selectors.get('title', {}).get('selector', ''),
+                    'body': gpt_selectors.get('body', {}).get('selector', ''),
+                    'date': gpt_selectors.get('date', {}).get('selector', '')
+                }
+                logger.warning(f"[UC3 Consensus] Gemini didn't return best_selectors, using GPT proposal: {best_selectors}")
+
+        # None 값을 빈 문자열로 변환 (DB NOT NULL 제약 조건 대응)
+        if best_selectors:
+            best_selectors = {
+                'title': best_selectors.get('title') or '',
+                'body': best_selectors.get('body') or '',
+                'date': best_selectors.get('date') or ''
+            }
 
     return {
         **state,
         "consensus_score": round(consensus_score, 2),
         "consensus_reached": consensus_reached,
         "extraction_quality": round(extraction_quality, 2),
-        "discovered_selectors": gemini_validation.get('best_selectors') if consensus_reached else None,
+        "discovered_selectors": best_selectors,
         "next_action": "save" if consensus_reached else "human_review"
     }
 
@@ -1473,15 +1502,15 @@ def create_uc3_agent():
 
     Changes from OLD workflow:
         - OLD: preprocess_html → gpt_discover → validate_selectors → check_quality
-        - NEW: firecrawl_preprocess → tavily_search → beautifulsoup_analyze
-               → gpt_discover_agent → gemini_validate_agent → calculate_consensus
+        - NEW: simple_preprocess → beautifulsoup_analyze
+               → gpt_discover_agent (Few-Shot) → gemini_validate_agent → calculate_consensus
     """
     graph = StateGraph(UC3State)
 
     # 노드 추가
     graph.add_node("fetch_html", fetch_html_node)
-    graph.add_node("firecrawl_preprocess", firecrawl_preprocess_node)
-    graph.add_node("tavily_search", tavily_search_node)
+    graph.add_node("simple_preprocess", simple_preprocess_node)  # Firecrawl 대체
+    # graph.add_node("tavily_search", tavily_search_node)  # REMOVED - not needed
     graph.add_node("beautifulsoup_analyze", beautifulsoup_analyze_node)
     graph.add_node("gpt_discover_agent", gpt_discover_agent_node)
     graph.add_node("gemini_validate_agent", gemini_validate_agent_node)
@@ -1490,9 +1519,9 @@ def create_uc3_agent():
 
     # 엣지 추가 (순차 실행)
     graph.add_edge(START, "fetch_html")
-    graph.add_edge("fetch_html", "firecrawl_preprocess")
-    graph.add_edge("firecrawl_preprocess", "tavily_search")
-    graph.add_edge("tavily_search", "beautifulsoup_analyze")
+    graph.add_edge("fetch_html", "simple_preprocess")  # Firecrawl → simple_preprocess
+    graph.add_edge("simple_preprocess", "beautifulsoup_analyze")
+    # graph.add_edge("tavily_search", "beautifulsoup_analyze")  # REMOVED
     graph.add_edge("beautifulsoup_analyze", "gpt_discover_agent")
     graph.add_edge("gpt_discover_agent", "gemini_validate_agent")
     graph.add_edge("gemini_validate_agent", "calculate_consensus")

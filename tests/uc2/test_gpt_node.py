@@ -30,8 +30,8 @@ def test_url():
 @pytest.mark.slow
 def test_gpt_propose_node_success(test_url, test_html_content):
     """GPT Propose Node 정상 작동 테스트"""
-    # .env 파일 로드
-    load_dotenv()
+    # .env 파일 로드 (override=True로 기존 환경변수 덮어쓰기)
+    load_dotenv(override=True)
 
     # State 초기화
     initial_state: HITLState = {
@@ -82,7 +82,7 @@ def test_gpt_propose_node_success(test_url, test_html_content):
 @pytest.mark.slow
 def test_gpt_propose_node_structure(test_url, test_html_content):
     """GPT Propose Node 결과 구조 검증"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     initial_state: HITLState = {
         "url": test_url,

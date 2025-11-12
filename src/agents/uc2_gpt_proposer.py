@@ -1,6 +1,7 @@
 """
 CrawlAgent - UC2 GPT-4o-mini CSS Selector Proposer (MVP)
 Created: 2025-11-08 (Sprint 1)
+Updated: 2025-11-12 (Few-Shot Examples 추가)
 
 GPT-4o-mini가 HTML을 분석하여 CSS Selector를 제안하는 Agent
 Lean Startup MVP: 최소 기능만 구현 → 즉시 검증
@@ -12,6 +13,7 @@ import time
 from typing import Dict, Optional
 from openai import OpenAI
 from loguru import logger
+from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
 
 # OpenAI API 설정
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -57,8 +59,11 @@ def propose_selectors(
         logger.warning(f"[GPT Proposer] HTML 크기 {len(html_content)} bytes → {MAX_HTML_SIZE} bytes로 제한")
         html_content = html_content[:MAX_HTML_SIZE]
 
+    # Few-Shot Examples 가져오기
+    few_shot_examples = get_few_shot_examples(limit=5)
+
     # 프롬프트 생성
-    prompt = _build_prompt(url, html_content, site_name, previous_selectors)
+    prompt = _build_prompt(url, html_content, site_name, previous_selectors, few_shot_examples)
 
     # GPT-4o-mini 호출 (재시도 로직 포함)
     max_retries = 3
@@ -136,9 +141,16 @@ def _build_prompt(
     url: str,
     html_content: str,
     site_name: str,
-    previous_selectors: Optional[Dict[str, str]]
+    previous_selectors: Optional[Dict[str, str]],
+    few_shot_examples: list = None
 ) -> str:
-    """GPT-4o-mini용 프롬프트 생성"""
+    """GPT-4o-mini용 프롬프트 생성 (Few-Shot Examples 포함)"""
+
+    # Few-Shot Examples 섹션
+    few_shot_section = ""
+    if few_shot_examples and len(few_shot_examples) > 0:
+        few_shot_section = "## 참고: 성공한 뉴스 사이트 Selector 패턴\n\n"
+        few_shot_section += format_few_shot_prompt(few_shot_examples, include_patterns=True)
 
     # 이전 Selector 정보 (있을 경우)
     prev_info = ""
@@ -153,14 +165,16 @@ def _build_prompt(
     prompt = f"""
 당신은 웹 크롤링 전문가입니다. HTML을 분석하여 뉴스 기사를 추출할 CSS Selector를 제안하세요.
 
+{few_shot_section}
+
 ## 입력 정보
 - **사이트**: {site_name}
 - **URL**: {url}
 {prev_info}
 
-## HTML 샘플 (처음 50KB)
+## HTML 샘플 (처음 20000자)
 ```html
-{html_content[:10000]}
+{html_content[:20000]}
 ```
 
 ## 임무

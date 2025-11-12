@@ -47,7 +47,7 @@ def initial_state(test_url, test_html_content):
 @pytest.mark.slow
 def test_gpt_gemini_integration_success(initial_state):
     """GPT + Gemini 통합 테스트 - 정상 플로우"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # GPT Propose Node 실행
     state_after_gpt = gpt_propose_node(initial_state)
@@ -95,7 +95,7 @@ def test_gpt_gemini_integration_success(initial_state):
 @pytest.mark.slow
 def test_gpt_gemini_state_continuity(initial_state):
     """GPT → Gemini State 연속성 테스트"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # GPT 실행
     state_after_gpt = gpt_propose_node(initial_state)
@@ -124,7 +124,7 @@ def test_gpt_gemini_state_continuity(initial_state):
 @pytest.mark.slow
 def test_consensus_logic(initial_state):
     """Consensus 도달 로직 테스트"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # GPT 실행
     state_after_gpt = gpt_propose_node(initial_state)
@@ -160,7 +160,7 @@ def test_consensus_logic(initial_state):
 @pytest.mark.slow
 def test_error_handling(test_url):
     """에러 처리 테스트"""
-    load_dotenv()
+    load_dotenv(override=True)
 
     # 잘못된 HTML로 State 생성
     invalid_state: HITLState = {
