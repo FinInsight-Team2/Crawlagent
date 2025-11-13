@@ -1432,11 +1432,13 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
         extraction_quality * 0.4
     )
 
-    # UC3 threshold: 0.55 (완화됨, UC2는 0.5)
-    consensus_reached = consensus_score >= 0.55
+    # UC3 threshold: 0.50 (완화됨 - v2.1 개선, UC2와 동일)
+    # 이전: 0.55 (CNN 0.58로 아슬아슬하게 통과)
+    # 개선: 0.50 (더 많은 케이스 허용, UC2와 일관성)
+    consensus_reached = consensus_score >= 0.50
 
     logger.info(f"[UC3 Consensus] GPT={gpt_conf:.2f}, Gemini={gemini_conf:.2f}, Extract={extraction_quality:.2f} → Score={consensus_score:.2f}")
-    logger.info(f"[UC3 Consensus] Threshold=0.55, Reached={consensus_reached}")
+    logger.info(f"[UC3 Consensus] Threshold=0.50, Reached={consensus_reached}")
 
     # Gemini best_selectors 또는 GPT proposal에서 추출
     best_selectors = None

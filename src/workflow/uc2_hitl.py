@@ -184,9 +184,10 @@ Return ONLY a JSON object with this structure:
 }}
 """
 
-        # GPT-4o-mini 호출
+        # GPT-4o 호출 (v2.1: gpt-4o-mini → gpt-4o 업그레이드)
+        # 비용: ~$0.01/call 증가, 정확도: +8-12% 예상
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",  # v2.1: Upgraded from gpt-4o-mini
             messages=[
                 {"role": "system", "content": "You are a CSS selector expert. Always return valid JSON."},
                 {"role": "user", "content": prompt}
@@ -270,12 +271,12 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
 
     if not body_success or not body:
         body_quality = 0.0
-    elif len(body) >= 200:
-        body_quality = 1.0  # 충분한 본문 (완화: 200자 이상)
-    elif len(body) >= 100:
-        body_quality = 0.7  # 중간 길이
-    elif len(body) >= 50:
-        body_quality = 0.4  # 짧은 본문
+    elif len(body) >= 100:  # v2.1: 200 → 100자로 완화 (SPA/짧은 기사 지원)
+        body_quality = 1.0  # 충분한 본문
+    elif len(body) >= 50:  # v2.1: 0.4 → 0.6으로 상향 (부분 점수 개선)
+        body_quality = 0.6  # 중간 길이 (이전 0.4)
+    elif len(body) >= 20:  # v2.1: 새로 추가 (최소한의 본문)
+        body_quality = 0.3  # 짧은 본문
     else:
         body_quality = 0.1  # 너무 짧음 (거의 실패)
 
@@ -294,17 +295,29 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
         else:
             date_quality = 0.5  # 날짜 같지만 확실하지 않음
 
-    # 4. 가중치 합산
+    # 4. Valid fields 카운트 (v2.1: 부분 성공 처리용)
+    valid_fields = sum([
+        1 if title_quality >= 0.3 else 0,  # Title이 최소 기준 충족
+        1 if body_quality >= 0.3 else 0,   # Body가 최소 기준 충족
+        1 if date_quality >= 0.5 else 0    # Date가 최소 기준 충족
+    ])
+
+    # 5. 가중치 합산
     extraction_quality = (
         title_quality * 0.3 +
         body_quality * 0.5 +
         date_quality * 0.2
     )
 
+    # v2.1: 부분 성공 보너스 (2/3 필드 성공 시 +0.05)
+    if valid_fields == 2:
+        extraction_quality = min(1.0, extraction_quality + 0.05)
+        logger.info(f"[Extraction Quality] Partial success bonus: 2/3 fields valid (+0.05)")
+
     logger.debug(
         f"[Extraction Quality] title={title_quality:.2f}, "
-        f"body={body_quality:.2f}, date={date_quality:.2f} "
-        f"→ total={extraction_quality:.2f}"
+        f"body={body_quality:.2f}, date={date_quality:.2f}, "
+        f"valid_fields={valid_fields}/3 → total={extraction_quality:.2f}"
     )
 
     return round(extraction_quality, 2)
