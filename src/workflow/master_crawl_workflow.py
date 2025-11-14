@@ -93,15 +93,8 @@ from datetime import datetime
 # LangChain imports for Supervisor LLM
 from langchain_openai import ChatOpenAI
 
-# Phase 1 Safety Enhancements: Supervisor reliability improvements
-from src.workflow.supervisor_safety import (
-    validate_confidence_threshold,
-    detect_routing_loop,
-    validate_state_transition,
-    log_safety_summary,
-    MIN_CONFIDENCE_THRESHOLD,
-    MAX_LOOP_REPEATS
-)
+# Phase 1 Safety: Loop detection (Rule-based Supervisor에서 직접 구현)
+MAX_LOOP_REPEATS = 3  # 동일 UC 최대 반복 횟수
 
 
 # ============================================================================
@@ -652,275 +645,6 @@ def supervisor_node(state: MasterCrawlState) -> Command[Literal["uc1_validation"
     )
 
 
-def supervisor_llm_node(state: MasterCrawlState) -> Command[Literal["uc1_validation", "uc2_self_heal", "uc3_new_site", "__end__"]]:
-    """
-    Supervisor Agent with LLM (GPT-4o-mini)
-
-    목적:
-        - 규칙 기반 if-else 대신 LLM으로 지능형 라우팅
-        - 복잡한 edge case 처리
-        - 컨텍스트 기반 판단
-        - 자가 설명 (reasoning 제공)
-
-    장점:
-        - 유연한 판단 (예: UC1 실패 원인에 따라 UC2/UC3 선택)
-        - 히스토리 분석 (반복 실패 패턴 인식)
-        - 확장 가능 (새로운 UC 추가 시 코드 변경 최소화)
-
-    Args:
-        state: MasterCrawlState
-
-    Returns:
-        Command: State 업데이트 + goto 라우팅 (LLM 추론 결과 포함)
-    """
-    logger.info("[Supervisor LLM] 🧠 GPT-4o-mini intelligent routing started")
-
-    # State 분석
-    current_uc = state.get("current_uc")
-    workflow_history = state.get("workflow_history", [])
-
-    # ========================================================================
-    # Phase 1 Safety Enhancement 2: Loop Detection
-    # ========================================================================
-    # LLM 호출 전에 루프를 감지하여 API 비용과 지연 시간 절약
-    # 예: UC1→UC1→UC1 (3회 반복) 시 워크플로우 즉시 종료
-
-    loop_detected, loop_pattern = detect_routing_loop(workflow_history, max_repeats=MAX_LOOP_REPEATS)
-
-    if loop_detected:
-        logger.error(
-            f"[Supervisor LLM] 🔁 라우팅 루프 감지: {loop_pattern}"
-        )
-        logger.error(
-            f"[Supervisor LLM] 📊 워크플로우 히스토리 (최근 10개): {workflow_history[-10:]}"
-        )
-        logger.warning(
-            f"[Supervisor LLM] 🛑 무한 루프 방지를 위해 워크플로우 종료"
-        )
-
-        # 루프 감지 시 즉시 END로 이동
-        return Command(
-            update={
-                "error_message": f"라우팅 루프 감지: {loop_pattern}. 동일한 UC를 {MAX_LOOP_REPEATS}회 이상 반복했습니다.",
-                "workflow_history": workflow_history + [
-                    f"supervisor_llm → END (루프 감지: {loop_pattern})"
-                ],
-                "next_action": "end",
-                "supervisor_reasoning": f"루프 감지로 인한 강제 종료: {loop_pattern}",
-                "supervisor_confidence": 0.0  # 시스템 강제 종료이므로 confidence 없음
-            },
-            goto=END
-        )
-
-    logger.debug(f"[Supervisor LLM] ✅ 루프 감지 통과 (history 길이: {len(workflow_history)})")
-
-    # LLM에 전달할 컨텍스트 구성
-    context = {
-        "current_uc": current_uc,
-        "url": state.get("url", "unknown"),
-        "site_name": state.get("site_name", "unknown"),
-        "workflow_history": workflow_history[-5:] if len(workflow_history) > 5 else workflow_history,  # 최근 5개만
-    }
-
-    # UC별 결과 추가
-    if current_uc == "uc1":
-        uc1_result = state.get("uc1_validation_result")
-        if uc1_result:
-            context["uc1_result"] = {
-                "quality_score": uc1_result.get("quality_score", 0),
-                "quality_passed": state.get("quality_passed", False),
-                "next_action": uc1_result.get("next_action", "unknown")
-            }
-
-    elif current_uc == "uc2":
-        uc2_result = state.get("uc2_consensus_result")
-        if uc2_result:
-            context["uc2_result"] = {
-                "consensus_reached": uc2_result.get("consensus_reached", False),
-                "consensus_score": uc2_result.get("consensus_score", 0.0)
-            }
-
-    elif current_uc == "uc3":
-        uc3_result = state.get("uc3_discovery_result")
-        if uc3_result:
-            context["uc3_result"] = {
-                "selectors_discovered": uc3_result.get("selectors_discovered") is not None,
-                "confidence": uc3_result.get("confidence", 0.0)
-            }
-
-    # 최초 진입 시 (current_uc 없음)
-    if not current_uc:
-        context["first_entry"] = True
-
-    # GPT-4o-mini 호출
-    try:
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-        prompt = f"""You are an intelligent Supervisor for a multi-agent web crawling system.
-
-Your job is to analyze the current state and decide the next action.
-
-**Current State**:
-```json
-{json.dumps(context, indent=2, ensure_ascii=False)}
-```
-
-**Available Actions**:
-1. "uc1_validation" - Quality validation (rule-based, no LLM)
-2. "uc2_self_heal" - Self-healing with 2-Agent consensus (GPT-4o-mini + Gemini)
-3. "uc3_new_site" - New site discovery with 3-Tool + 2-Agent (GPT-4o + Gemini)
-4. "END" - End workflow
-
-**Decision Rules**:
-- If first_entry=true: Start with "uc1_validation"
-- If uc1 passed (quality_passed=true): "END"
-- If uc1 failed AND next_action="heal": "uc2_self_heal"
-- If uc1 failed AND next_action="uc3": "uc3_new_site"
-- If uc2 consensus_reached=true: "uc1_validation" (retry with new selectors)
-- If uc2 consensus_reached=false: "END" (human review needed)
-- If uc3 success: "END"
-- If uc3 failed: "END"
-
-**Return JSON format**:
-{{
-    "next_action": "uc1_validation" | "uc2_self_heal" | "uc3_new_site" | "END",
-    "reasoning": "Clear explanation of why this decision was made",
-    "confidence": 0.0-1.0
-}}
-
-**IMPORTANT**: Be concise and follow the rules strictly. Return ONLY valid JSON.
-"""
-
-        response = llm.invoke([{"role": "user", "content": prompt}])
-
-        # JSON 파싱
-        try:
-            decision = json.loads(response.content)
-        except:
-            # Fallback: extract JSON from markdown
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
-            if json_match:
-                decision = json.loads(json_match.group(1))
-            else:
-                raise ValueError(f"Failed to parse LLM response: {response.content}")
-
-        next_action = decision["next_action"]
-        reasoning = decision.get("reasoning", "No reasoning provided")
-        confidence = decision.get("confidence", 0.0)
-
-        logger.info(f"[Supervisor LLM] 🎯 Decision: {next_action} (confidence={confidence:.2f})")
-        logger.info(f"[Supervisor LLM] 💭 Reasoning: {reasoning}")
-
-        # ====================================================================
-        # Phase 1 Safety Enhancement 1: Confidence Threshold Validation
-        # ====================================================================
-        # LLM의 신뢰도가 최소 임계값(0.6)을 충족하는지 검증
-        # UC2 consensus threshold와 동일한 기준 적용 (일관성 유지)
-
-        confidence_valid, confidence_error = validate_confidence_threshold(
-            confidence=confidence,
-            threshold=MIN_CONFIDENCE_THRESHOLD
-        )
-
-        if not confidence_valid:
-            logger.warning(
-                f"[Supervisor LLM] ⚠️ 낮은 신뢰도 감지: {confidence:.2f} < {MIN_CONFIDENCE_THRESHOLD}"
-            )
-            logger.warning(
-                f"[Supervisor LLM] 🔄 낮은 신뢰도로 인해 rule-based supervisor로 fallback"
-            )
-            logger.info(
-                f"[Supervisor LLM] 💭 LLM reasoning (거부됨): {reasoning}"
-            )
-            logger.info(
-                f"[Supervisor LLM] 📊 거부 사유: {confidence_error}"
-            )
-
-            # Rule-based supervisor로 fallback
-            return supervisor_node(state)
-
-        logger.debug(f"[Supervisor LLM] ✅ 신뢰도 검증 통과: {confidence:.2f} >= {MIN_CONFIDENCE_THRESHOLD}")
-
-        # 라우팅 매핑
-        routing_map = {
-            "uc1_validation": "uc1_validation",
-            "uc2_self_heal": "uc2_self_heal",
-            "uc3_new_site": "uc3_new_site",
-            "END": END
-        }
-
-        goto_target = routing_map.get(next_action, END)
-
-        # ====================================================================
-        # Phase 1 Safety Enhancement 3: State Constraint Validation
-        # ====================================================================
-        # LLM이 제안한 상태 전이가 비즈니스 로직 규칙을 따르는지 검증
-        # 예: UC3 → UC1 (불가능), UC1 → UC1 (self-loop 불가능)
-
-        transition_valid, transition_error = validate_state_transition(
-            current_uc=current_uc,
-            next_action=next_action,
-            state=state
-        )
-
-        if not transition_valid:
-            logger.error(
-                f"[Supervisor LLM] ❌ 잘못된 상태 전이: {current_uc} → {next_action}"
-            )
-            logger.error(
-                f"[Supervisor LLM] 🚫 거부 사유: {transition_error}"
-            )
-            logger.warning(
-                f"[Supervisor LLM] 🔄 잘못된 전이로 인해 rule-based supervisor로 fallback"
-            )
-            logger.info(
-                f"[Supervisor LLM] 💭 LLM reasoning (거부됨): {reasoning}"
-            )
-
-            # Rule-based supervisor로 fallback
-            return supervisor_node(state)
-
-        logger.debug(f"[Supervisor LLM] ✅ 상태 전이 검증 통과: {current_uc} → {next_action}")
-
-        # State 업데이트
-        update_dict = {
-            "supervisor_reasoning": reasoning,
-            "supervisor_confidence": confidence,
-            "workflow_history": workflow_history + [f"supervisor_llm → {next_action} (LLM conf={confidence:.2f})"],
-            "routing_context": {
-                "timestamp": datetime.now().isoformat(),
-                "decision": next_action,
-                "llm_confidence": confidence,
-                "state_snapshot": context
-            }
-        }
-
-        # current_uc 업데이트 (END가 아닌 경우)
-        if next_action != "END":
-            uc_map = {
-                "uc1_validation": "uc1",
-                "uc2_self_heal": "uc2",
-                "uc3_new_site": "uc3"
-            }
-            update_dict["current_uc"] = uc_map.get(next_action)
-            update_dict["next_action"] = uc_map.get(next_action)
-        else:
-            update_dict["next_action"] = "end"
-
-        return Command(
-            update=update_dict,
-            goto=goto_target
-        )
-
-    except Exception as e:
-        logger.error(f"[Supervisor LLM] ❌ LLM routing failed: {e}")
-        logger.warning("[Supervisor LLM] 🔄 Falling back to rule-based supervisor")
-
-        # Fallback: 기존 rule-based supervisor 호출
-        return supervisor_node(state)
-
-
 # ============================================================================
 # UC1 Node Wrapper (기존 UC1 워크플로우 호출)
 # ============================================================================
@@ -1118,10 +842,14 @@ def uc1_validation_node(state: MasterCrawlState) -> Command[Literal["supervisor"
             update={
                 "uc1_validation_result": {
                     "quality_passed": False,
+                    "quality_score": 0,
+                    "next_action": "uc3",  # UC1 에러 시 UC3로 라우팅
                     "error_message": str(e)
                 },
+                "quality_passed": False,
+                "next_action": "uc3",  # 명시적으로 uc3 설정
                 "error_message": f"UC1 failed: {str(e)}",
-                "workflow_history": state.get("workflow_history", []) + [f"uc1_validation → supervisor (ERROR: {str(e)})"]
+                "workflow_history": state.get("workflow_history", []) + [f"uc1_validation → supervisor (ERROR: {str(e)}, next=uc3)"]
             },
             goto="supervisor"
         )
@@ -1232,6 +960,7 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
 # ============================================================================
 
 from src.workflow.uc3_new_site import create_uc3_agent, UC3State
+from src.utils.meta_extractor import extract_metadata_smart, get_metadata_quality_score
 
 def uc3_new_site_node(state: MasterCrawlState) -> Command[Literal["supervisor"]]:
     """
@@ -1254,6 +983,43 @@ def uc3_new_site_node(state: MasterCrawlState) -> Command[Literal["supervisor"]]
     logger.info("[UC3 Node] 🆕 New Site Discovery started")
 
     try:
+        # 0. JSON-LD Smart Extraction 시도 (GPT/Gemini skip 가능)
+        html_content = state.get("html_content")
+        if html_content:
+            logger.info("[UC3 Node] 📦 Attempting JSON-LD smart extraction...")
+            metadata = extract_metadata_smart(html_content)
+            quality_score = get_metadata_quality_score(metadata)
+
+            # JSON-LD 성공 시 GPT/Gemini skip
+            if metadata.get('title') and quality_score >= 0.7:
+                logger.info(f"[UC3 Node] ✅ JSON-LD extraction successful (quality={quality_score:.2f})")
+                logger.info(f"[UC3 Node] ⚡ Skipping GPT/Gemini (JSON-LD provides structured data)")
+
+                # Discovered selectors로 변환 (JSON-LD 기반)
+                discovered_selectors = {
+                    "title": metadata.get('title', ''),
+                    "body": metadata.get('description', ''),
+                    "date": metadata.get('date', ''),
+                    "source": metadata.get('source', 'json-ld')
+                }
+
+                return Command(
+                    update={
+                        "uc3_discovery_result": {
+                            "discovered_selectors": discovered_selectors,
+                            "confidence": quality_score,
+                            "source": "json-ld",
+                            "gpt_skipped": True
+                        },
+                        "current_uc": "uc3",
+                        "workflow_history": state.get("workflow_history", []) +
+                                          [f"uc3_new_site → supervisor (JSON-LD: {quality_score:.2f})"]
+                    },
+                    goto="supervisor"
+                )
+            else:
+                logger.info(f"[UC3 Node] ⚠️ JSON-LD quality insufficient ({quality_score:.2f}), proceeding to GPT/Gemini")
+
         # 1. UC3 Graph 빌드
         uc3_graph = create_uc3_agent()
 
@@ -1360,21 +1126,14 @@ def build_master_graph():
     """
     logger.info("[build_master_graph] 🏗️  Building Master LangGraph StateGraph...")
 
-    # Phase 4: Supervisor 선택 로직
-    use_llm_supervisor = os.getenv("USE_SUPERVISOR_LLM", "false").lower() == "true"
-
-    if use_llm_supervisor:
-        supervisor_func = supervisor_llm_node
-        logger.info("[build_master_graph] 🧠 Using LLM Supervisor (GPT-4o-mini)")
-    else:
-        supervisor_func = supervisor_node
-        logger.info("[build_master_graph] 📋 Using Rule-based Supervisor (if-else)")
+    # v2.1: Rule-based Supervisor only (LLM Supervisor 제거)
+    logger.info("[build_master_graph] 📋 Using Rule-based Supervisor")
 
     # 1. StateGraph 생성
     workflow = StateGraph(MasterCrawlState)
 
     # 2. Node 추가
-    workflow.add_node("supervisor", supervisor_func)
+    workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("uc1_validation", uc1_validation_node)
     workflow.add_node("uc2_self_heal", uc2_self_heal_node)
     workflow.add_node("uc3_new_site", uc3_new_site_node)
@@ -1418,8 +1177,57 @@ if __name__ == "__main__":
     test_url = "https://www.yonhapnewstv.co.kr/news/MYH20251107014400038"
 
     logger.info(f"[Test] Fetching HTML from {test_url}")
-    response = requests.get(test_url, timeout=10)
-    html_content = response.text
+
+    # HTTP retry logic with exponential backoff
+    permanent_status_codes = {400, 401, 403, 404, 410}
+    transient_status_codes = {429, 500, 502, 503, 504}
+    max_retries = 3
+    html_content = None
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(test_url, timeout=10, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            })
+            response.raise_for_status()
+            html_content = response.text
+            logger.info(f"[Test] ✅ HTML fetched successfully (attempt={attempt+1})")
+            break
+
+        except requests.exceptions.HTTPError as http_error:
+            last_error = http_error
+            status_code = http_error.response.status_code if http_error.response else None
+
+            # Permanent errors - do not retry
+            if status_code in permanent_status_codes:
+                logger.error(f"[Test] ❌ Permanent HTTP error {status_code}, aborting")
+                raise
+
+            # Transient errors - retry with exponential backoff
+            elif status_code in transient_status_codes:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1
+                    logger.warning(f"[Test] ⚠️ Transient HTTP error {status_code} (attempt={attempt+1}), retrying after {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"[Test] ❌ Max retries reached for HTTP {status_code}")
+                    raise
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as conn_error:
+            last_error = conn_error
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 1
+                logger.warning(f"[Test] ⚠️ Network error (attempt={attempt+1}), retrying after {wait_time}s")
+                time.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"[Test] ❌ Max retries reached for network error")
+                raise
+
+    if html_content is None:
+        raise Exception(f"Failed to fetch HTML after {max_retries} attempts: {last_error}")
 
     # 3. 초기 State
     initial_state: MasterCrawlState = {

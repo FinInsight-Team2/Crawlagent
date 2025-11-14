@@ -228,8 +228,7 @@ def test_env_vars():
     """테스트용 환경 변수 설정 (모든 테스트에 자동 적용)"""
     original_env = os.environ.copy()
 
-    # 테스트용 환경 변수
-    os.environ["USE_SUPERVISOR_LLM"] = "false"  # Rule-based Supervisor 사용
+    # 테스트용 환경 변수 (v2.1: USE_SUPERVISOR_LLM 제거됨)
     os.environ["OPENAI_API_KEY"] = "test-key-openai"
     os.environ["GOOGLE_API_KEY"] = "test-key-google"
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"

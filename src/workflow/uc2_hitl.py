@@ -137,26 +137,24 @@ def gpt_propose_node(state: HITLState) -> HITLState:
     """
     logger.info(f"[GPT Propose Node] Starting for {state['url']}")
 
-    try:
-        # Few-Shot Retriever import
-        from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+    # Few-Shot Retriever import
+    from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+    from src.exceptions import OpenAIAPIError, is_retryable_error, format_error_for_user
+    import time
 
-        # OpenAI 클라이언트 초기화
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    # HTML 샘플 추출 (20000자로 증가)
+    html_sample = state.get("html_content", "")[:20000]
 
-        # HTML 샘플 추출 (20000자로 증가)
-        html_sample = state.get("html_content", "")[:20000]
+    # Few-Shot Examples 가져오기
+    few_shot_examples = get_few_shot_examples(limit=5)
+    few_shot_section = ""
+    if few_shot_examples and len(few_shot_examples) > 0:
+        few_shot_section = "## Few-Shot Examples (성공한 뉴스 사이트 패턴)\n\n"
+        few_shot_section += format_few_shot_prompt(few_shot_examples, include_patterns=True)
+        few_shot_section += "\n"
 
-        # Few-Shot Examples 가져오기
-        few_shot_examples = get_few_shot_examples(limit=5)
-        few_shot_section = ""
-        if few_shot_examples and len(few_shot_examples) > 0:
-            few_shot_section = "## Few-Shot Examples (성공한 뉴스 사이트 패턴)\n\n"
-            few_shot_section += format_few_shot_prompt(few_shot_examples, include_patterns=True)
-            few_shot_section += "\n"
-
-        # GPT 프롬프트 (Few-Shot 포함)
-        prompt = f"""
+    # GPT 프롬프트 (Few-Shot 포함)
+    prompt = f"""
 You are an expert web scraper. Analyze the following HTML and propose CSS selectors.
 
 {few_shot_section}
@@ -184,38 +182,73 @@ Return ONLY a JSON object with this structure:
 }}
 """
 
-        # GPT-4o 호출 (v2.1: gpt-4o-mini → gpt-4o 업그레이드)
-        # 비용: ~$0.01/call 증가, 정확도: +8-12% 예상
-        response = client.chat.completions.create(
-            model="gpt-4o",  # v2.1: Upgraded from gpt-4o-mini
-            messages=[
-                {"role": "system", "content": "You are a CSS selector expert. Always return valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            response_format={"type": "json_object"}
-        )
+    # OpenAI API keys (primary + backup)
+    api_keys = [
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_API_KEY_BACKUP_1")
+    ]
+    api_keys = [key for key in api_keys if key]  # None 제거
 
-        # 결과 파싱
-        proposal_text = response.choices[0].message.content
-        proposal = json.loads(proposal_text)
+    # Retry logic with fallback
+    max_retries = 3
+    last_error = None
 
-        logger.info(f"[GPT Propose Node] Proposal generated with confidence {proposal.get('confidence', 0)}")
+    for key_idx, api_key in enumerate(api_keys):
+        for attempt in range(max_retries):
+            try:
+                # OpenAI 클라이언트 초기화 (timeout 30초)
+                client = OpenAI(api_key=api_key, timeout=30.0)
 
-        # State 업데이트 (불변성 유지)
-        return {
-            **state,
-            "gpt_proposal": proposal,
-            "next_action": "validate"
-        }
+                # GPT-4o 호출 (v2.1: gpt-4o-mini → gpt-4o 업그레이드)
+                # 비용: ~$0.01/call 증가, 정확도: +8-12% 예상
+                response = client.chat.completions.create(
+                    model="gpt-4o",  # v2.1: Upgraded from gpt-4o-mini
+                    messages=[
+                        {"role": "system", "content": "You are a CSS selector expert. Always return valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    response_format={"type": "json_object"}
+                )
 
-    except Exception as e:
-        logger.error(f"[GPT Propose Node] Error: {e}")
-        return {
-            **state,
-            "error_message": f"GPT proposal failed: {str(e)}",
-            "next_action": "end"
-        }
+                # 결과 파싱
+                proposal_text = response.choices[0].message.content
+                proposal = json.loads(proposal_text)
+
+                logger.info(f"[GPT Propose Node] ✅ Success (key={key_idx+1}, attempt={attempt+1}, confidence={proposal.get('confidence', 0)})")
+
+                # State 업데이트 (불변성 유지)
+                return {
+                    **state,
+                    "gpt_proposal": proposal,
+                    "next_action": "validate"
+                }
+
+            except Exception as raw_error:
+                last_error = raw_error
+                error = OpenAIAPIError.from_openai_error(raw_error)
+
+                # Retry 가능한 오류인가? (429 Rate Limit, 503/504 Server Error)
+                if is_retryable_error(error) and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"[GPT Propose Node] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries}): {error}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # 재시도 불가능하거나 마지막 시도 실패
+                    logger.error(f"[GPT Propose Node] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}")
+                    break  # 다음 API 키로
+
+    # 모든 API 키와 재시도 실패
+    user_message = format_error_for_user(OpenAIAPIError.from_openai_error(last_error) if last_error else Exception("Unknown error"))
+    logger.error(f"[GPT Propose Node] ❌ All API keys exhausted. Last error: {user_message}")
+
+    return {
+        **state,
+        "gpt_proposal": None,
+        "error_message": f"GPT proposal failed: {user_message}",
+        "next_action": "end"
+    }
 
 
 # ============================================================================
@@ -540,13 +573,162 @@ Criteria:
             "next_action": next_action
         }
 
-    except Exception as e:
-        logger.error(f"[Gemini Validate Node] Error: {e}")
-        return {
-            **state,
-            "error_message": f"Gemini validation failed: {str(e)}",
-            "next_action": "end"
-        }
+    except Exception as gemini_error:
+        logger.error(f"[Gemini Validate Node] ❌ Gemini validation failed: {gemini_error}")
+        logger.warning("[Gemini Validate Node] 🔄 Falling back to GPT-4o-mini for validation")
+
+        # Fallback: GPT-4o-mini로 검증 시도
+        try:
+            from langchain_openai import ChatOpenAI
+            from src.exceptions import OpenAIAPIError, format_error_for_user
+            import time
+
+            # GPT 제안 가져오기
+            gpt_proposal = state.get("gpt_proposal")
+            if not gpt_proposal:
+                raise ValueError("No GPT proposal found in state")
+
+            # CSS Selector로 실제 데이터 추출 시도 (Gemini에서 했던 것과 동일)
+            html_content = state.get("html_content", "")
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            extracted_data = {}
+            extraction_success = {}
+
+            for field in ["title", "body", "date"]:
+                selector_key = f"{field}_selector"
+                selector = gpt_proposal.get(selector_key, "")
+
+                try:
+                    elements = soup.select(selector)
+                    if elements:
+                        text = elements[0].get_text(strip=True)
+                        extracted_data[field] = text[:200]
+                        extraction_success[field] = True
+                    else:
+                        extracted_data[field] = None
+                        extraction_success[field] = False
+                except Exception as e:
+                    logger.warning(f"[Fallback Validate] Extraction failed for {field}: {e}")
+                    extracted_data[field] = None
+                    extraction_success[field] = False
+
+            # GPT-4o-mini 검증 요청
+            validation_prompt = f"""
+You are a web scraping validator. Evaluate the following CSS selector proposal.
+
+URL: {state['url']}
+
+GPT Proposal:
+- Title Selector: {gpt_proposal.get('title_selector')}
+- Body Selector: {gpt_proposal.get('body_selector')}
+- Date Selector: {gpt_proposal.get('date_selector')}
+- GPT Confidence: {gpt_proposal.get('confidence')}
+
+Extraction Results:
+- Title: {"SUCCESS" if extraction_success.get('title') else "FAILED"}
+  Extracted: {(extracted_data.get('title') or 'N/A')[:100]}
+- Body: {"SUCCESS" if extraction_success.get('body') else "FAILED"}
+  Extracted: {(extracted_data.get('body') or 'N/A')[:100]}
+- Date: {"SUCCESS" if extraction_success.get('date') else "FAILED"}
+  Extracted: {(extracted_data.get('date') or 'N/A')[:100]}
+
+Task: Validate whether these selectors are good quality.
+
+Return ONLY a JSON object:
+{{
+    "is_valid": true/false,
+    "confidence": 0.0-1.0,
+    "feedback": "brief explanation",
+    "suggested_changes": {{"field": "new selector or null"}}
+}}
+
+Criteria:
+- is_valid: true if at least 2/3 fields extracted successfully
+- confidence: based on extraction quality
+- feedback: explain validation result
+"""
+
+            # GPT-4o-mini 호출 (최대 2회 재시도)
+            for attempt in range(2):
+                try:
+                    fallback_llm = ChatOpenAI(
+                        model="gpt-4o-mini",
+                        temperature=0.2,
+                        timeout=30.0
+                    )
+                    response = fallback_llm.invoke([{"role": "user", "content": validation_prompt}])
+                    fallback_output = json.loads(response.content)
+
+                    logger.info(f"[Fallback Validate] ✅ GPT-4o-mini validation succeeded (attempt {attempt+1})")
+
+                    # Consensus 계산
+                    extraction_quality = calculate_extraction_quality(extracted_data, extraction_success)
+                    gpt_confidence = gpt_proposal.get("confidence", 0.0)
+                    gemini_confidence = fallback_output.get("confidence", 0.0)  # GPT-4o-mini가 대체
+                    consensus_score = calculate_consensus_score(
+                        gpt_confidence,
+                        gemini_confidence,
+                        extraction_quality
+                    )
+
+                    # Consensus 판단
+                    if consensus_score >= 0.7:
+                        consensus_reached = True
+                        logger.info(f"[Consensus Fallback] ✅ AUTO-APPROVED (score={consensus_score:.2f})")
+                    elif consensus_score >= 0.5:
+                        consensus_reached = True
+                        logger.warning(f"[Consensus Fallback] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f})")
+                    else:
+                        consensus_reached = False
+                        logger.warning(f"[Consensus Fallback] ❌ REJECTED (score={consensus_score:.2f})")
+
+                    # next_action 결정
+                    if consensus_reached:
+                        next_action = "end"
+                    else:
+                        retry_count = state.get("retry_count", 0)
+                        if retry_count < 3:
+                            next_action = "retry"
+                        else:
+                            next_action = "human_review"
+
+                    return {
+                        **state,
+                        "gemini_validation": fallback_output,
+                        "consensus_reached": consensus_reached,
+                        "retry_count": retry_count + (0 if consensus_reached else 1),
+                        "final_selectors": gpt_proposal if consensus_reached else None,
+                        "next_action": next_action,
+                        "fallback_used": "gpt-4o-mini"  # 메타데이터
+                    }
+
+                except Exception as retry_error:
+                    if attempt < 1:  # 1회 더 시도
+                        wait_time = 2 ** attempt
+                        logger.warning(f"[Fallback Validate] ⚠️ Retry after {wait_time}s: {retry_error}")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"[Fallback Validate] ❌ GPT-4o-mini also failed: {retry_error}")
+                        raise
+
+        except Exception as fallback_error:
+            # Gemini와 GPT-4o-mini 모두 실패
+            logger.error(f"[Gemini Validate Node] ❌ Both Gemini and fallback failed")
+            logger.error(f"  - Gemini error: {gemini_error}")
+            logger.error(f"  - Fallback error: {fallback_error}")
+
+            from src.exceptions import format_error_for_user, GeminiAPIError
+            user_message = format_error_for_user(GeminiAPIError(str(gemini_error)))
+
+            return {
+                **state,
+                "error_message": f"Validation failed: {user_message} (Fallback also failed)",
+                "gemini_validation": None,
+                "consensus_reached": False,
+                "next_action": "end"
+            }
 
 
 # ============================================================================

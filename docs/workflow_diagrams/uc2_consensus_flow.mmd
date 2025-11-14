@@ -1,0 +1,32 @@
+
+graph TD
+    Start([UC1 실패<br/>품질 < 80]) --> LoadFewShot[Few-Shot Examples<br/>DB에서 로드]
+
+    LoadFewShot --> GPTProposer[Agent 1: GPT-4o Proposer<br/>Few-Shot + HTML 분석]
+
+    GPTProposer --> ProposeSelectors[새로운 CSS Selector 제안<br/>+ Confidence Score]
+
+    ProposeSelectors --> TestSelectors[제안된 Selector로<br/>실제 HTML 테스트]
+
+    TestSelectors --> GeminiValidator[Agent 2: Gemini-2.5-pro Validator<br/>추출 결과 검증]
+
+    GeminiValidator --> CalcConsensus[Consensus Score 계산<br/>= GPT × 0.3<br/>+ Gemini × 0.3<br/>+ Extraction × 0.4]
+
+    CalcConsensus --> ConsensusCheck{Consensus<br/>≥ 0.5?}
+
+    ConsensusCheck -->|Yes ✅| UpdateDB[DB Selector 업데이트]
+    ConsensusCheck -->|No ❌| RetryCheck{재시도<br/>< 3회?}
+
+    RetryCheck -->|Yes| GPTProposer
+    RetryCheck -->|No| TriggerUC3[UC3 Discovery<br/>트리거]
+
+    UpdateDB --> RetryUC1[UC1 재시도<br/>새 Selector로]
+
+    RetryUC1 --> Success([성공])
+    TriggerUC3 --> End2([UC3로 전환])
+
+    style Start fill:#f59e0b
+    style Success fill:#10b981
+    style GPTProposer fill:#3b82f6
+    style GeminiValidator fill:#8b5cf6
+    style UpdateDB fill:#10b981

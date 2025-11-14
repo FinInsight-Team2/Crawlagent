@@ -3,7 +3,7 @@ E2E Test: Master Workflow - UC1 성공 시나리오
 
 시나리오:
     1. 고품질 기사 입력
-    2. Supervisor → UC1 라우팅
+    2. Supervisor → UC1 라우팅 (v2.1: Rule-based only)
     3. UC1 품질 검증 통과 (>= 80점)
     4. END (DB 저장 완료)
 
@@ -16,7 +16,7 @@ E2E Test: Master Workflow - UC1 성공 시나리오
 실행 방법:
     pytest tests/e2e/test_master_workflow.py -v
 
-작성일: 2025-11-11
+작성일: 2025-11-13 (v2.1: LLM Supervisor 제거됨)
 """
 
 import pytest
@@ -92,13 +92,12 @@ class TestMasterWorkflowUC1Success:
         """
         E2E Test: Rule-based Supervisor with UC1 성공
 
-        Given: USE_SUPERVISOR_LLM=false
+        Given: v2.1 Rule-based Supervisor (LLM Supervisor 제거됨)
         When: Master Workflow 실행
         Then: Rule-based Supervisor → UC1 → END
         """
 
-        # Given: Rule-based Supervisor 환경 변수
-        monkeypatch.setenv("USE_SUPERVISOR_LLM", "false")
+        # Given: v2.1 uses Rule-based Supervisor only (no env var needed)
 
         # Given: Master Graph 빌드
         master_app = build_master_graph()
@@ -126,6 +125,7 @@ class TestMasterWorkflowUC1Success:
             assert final_state.get("next_action") == "end", \
                 "Should end after UC1 success"
 
+    @pytest.mark.skip(reason="v2.1: LLM Supervisor 제거됨 - Rule-based Supervisor만 사용")
     @pytest.mark.slow
     def test_uc1_success_with_llm_supervisor(
         self,
@@ -134,16 +134,16 @@ class TestMasterWorkflowUC1Success:
         monkeypatch
     ):
         """
-        E2E Test: LLM Supervisor with UC1 성공
+        E2E Test: LLM Supervisor with UC1 성공 [DEPRECATED in v2.1]
 
         Given: USE_SUPERVISOR_LLM=true
         When: Master Workflow 실행
         Then: LLM Supervisor → UC1 → END
 
-        Note: 실제 LLM 호출하므로 느림 (slow marker)
+        Note: v2.1에서 LLM Supervisor 제거됨. 이 테스트는 더 이상 실행되지 않습니다.
         """
 
-        # Given: LLM Supervisor 환경 변수
+        # Given: LLM Supervisor 환경 변수 (v2.1에서 제거됨)
         monkeypatch.setenv("USE_SUPERVISOR_LLM", "true")
 
         # Given: Master Graph 빌드

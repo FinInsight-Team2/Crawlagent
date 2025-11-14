@@ -21,8 +21,18 @@ from typing import Dict, Literal
 from openai import OpenAI
 from loguru import logger
 
-# OpenAI API 설정
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# OpenAI 클라이언트 (lazy initialization)
+_client = None
+
+def get_openai_client():
+    """OpenAI 클라이언트 lazy initialization"""
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 
 def validate_quality(
@@ -77,6 +87,7 @@ def validate_quality(
     for attempt in range(max_retries):
         try:
             # GPT-4o-mini 호출 (JSON mode)
+            client = get_openai_client()
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[

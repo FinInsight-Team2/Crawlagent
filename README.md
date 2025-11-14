@@ -1,10 +1,27 @@
 # CrawlAgent - LangGraph Multi-Agent Self-Healing Web Crawler
 
 > **프로젝트 명칭**: CrawlAgent (pyproject.toml)
-> **개발 단계**: Phase 4 완료 (Supervisor LLM + Safety Enhancements)
-> **최종 업데이트**: 2025-11-10
+> **개발 단계**: Phase 1 준비 중 (실전 테스트)
+> **최종 업데이트**: 2025-11-13
 
 **LangGraph 기반 Multi-Agent 자동화 웹 크롤러** - AI가 HTML 구조 변경을 자동으로 감지하고 복구하는 Self-Healing 시스템
+
+---
+
+## ⚠️ 지원 범위 (2025-11-13 업데이트)
+
+**✅ 지원 대상**: **SSR (Server-Side Rendering) 뉴스 사이트 전용**
+- 연합뉴스, BBC, CNN, NYTimes, The Guardian, AP News, 조선일보 등
+- 서버에서 완전히 렌더링된 HTML을 제공하는 사이트
+
+**❌ 지원 제외**: **SPA (Single Page Application) - 완전 제외**
+- Medium, Quora, Twitter/X, Instagram 등
+- React, Vue, Angular 등 클라이언트 렌더링 사이트
+- JavaScript로 동적 콘텐츠를 로딩하는 사이트
+
+**이유**:
+- BeautifulSoup 기반 DOM 분석 (정적 HTML만 처리 가능)
+- Playwright/Selenium 추가하지 않음 (PoC 범위 집중)
 
 ---
 

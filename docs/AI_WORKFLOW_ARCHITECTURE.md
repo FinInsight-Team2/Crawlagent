@@ -1,7 +1,27 @@
 # CrawlAgent AI 워크플로우 아키텍처
 
-**작성일**: 2025-11-12
-**버전**: 2.0 (Few-Shot Examples 통합 버전)
+**작성일**: 2025-11-13
+**버전**: 2.1 (SSR 전용, SPA 제외)
+
+---
+
+## ⚠️ 중요: 지원 범위 (2025-11-13 업데이트)
+
+**✅ 지원 대상**: SSR (Server-Side Rendering) 뉴스 사이트
+- 연합뉴스, BBC, CNN, NYTimes, The Guardian, AP News, 조선일보 등
+- 서버에서 완전히 렌더링된 HTML 제공 사이트
+
+**❌ 지원 제외**: SPA (Single Page Application)
+- Medium, Quora, Twitter/X, Instagram 등
+- React, Vue, Angular 등 클라이언트 렌더링 사이트
+- JavaScript로 동적 콘텐츠 로딩하는 사이트
+
+**이유**:
+- BeautifulSoup 기반 DOM 분석 (정적 HTML만 처리 가능)
+- Playwright/Selenium 추가하지 않음 (복잡도 증가 방지)
+- PoC 범위를 SSR 뉴스 사이트로 집중
+
+---
 
 ---
 

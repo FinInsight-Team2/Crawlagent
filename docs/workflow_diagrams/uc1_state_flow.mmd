@@ -1,0 +1,26 @@
+
+graph TD
+    Start([URL 입력]) --> FetchHTML[HTML 다운로드]
+    FetchHTML --> GetSelector{DB에 Selector<br/>존재?}
+
+    GetSelector -->|Yes| ExtractFields[CSS Selector로<br/>Title/Body/Date 추출]
+    GetSelector -->|No| TriggerUC3[UC3 Discovery<br/>트리거]
+
+    ExtractFields --> Calculate5W1H[5W1H 품질 점수 계산]
+
+    Calculate5W1H --> ScoreBreakdown[점수 분해:<br/>Title: 20<br/>Body: 60<br/>Date: 10<br/>URL: 10]
+
+    ScoreBreakdown --> QualityCheck{품질 점수<br/>≥ 80?}
+
+    QualityCheck -->|Yes ✅| SaveDB[DB 저장]
+    QualityCheck -->|No ❌| TriggerUC2[UC2 Self-Healing<br/>트리거]
+
+    SaveDB --> End([성공])
+    TriggerUC3 --> End2([UC3로 전환])
+    TriggerUC2 --> End3([UC2로 전환])
+
+    style Start fill:#10b981
+    style End fill:#10b981
+    style SaveDB fill:#3b82f6
+    style TriggerUC2 fill:#f59e0b
+    style TriggerUC3 fill:#8b5cf6

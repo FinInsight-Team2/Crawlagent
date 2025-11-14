@@ -38,6 +38,9 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from loguru import logger
+
+# v2.1: Site ID 정규화 유틸리티
+from src.utils.site_detector import extract_site_id
 from datetime import datetime
 from functools import partial
 
@@ -243,24 +246,18 @@ class UC3State(TypedDict, total=False):
 # Step 3: Helper Functions
 # ============================================================
 
+# v2.1: extract_site_name() 함수는 src/utils/site_detector.py로 이동
+# 하위 호환성을 위해 별칭 제공
 def extract_site_name(url: str) -> str:
     """
-    URL에서 사이트 이름 추출
+    URL에서 사이트 이름 추출 (v2.1: site_detector.py 사용)
 
     예시:
         "https://www.chosun.com/..." → "chosun"
-        "https://news.naver.com/..." → "naver"
+        "https://news.jtbc.co.kr/..." → "jtbc" (개선됨)
+        "https://edition.cnn.com/..." → "cnn" (개선됨)
     """
-    parsed = urlparse(url)
-    domain = parsed.netloc
-
-    # www. 제거
-    domain = domain.replace("www.", "")
-
-    # 첫 번째 도메인 이름 추출
-    site_name = domain.split(".")[0]
-
-    return site_name
+    return extract_site_id(url)
 
 
 def preprocess_html(raw_html: str) -> str:
@@ -329,6 +326,7 @@ def fetch_html_node(state: UC3State) -> dict:
 
     목적:
         입력받은 URL의 HTML을 다운로드합니다.
+        HTTP retry logic with distinction between permanent and transient errors.
 
     입력:
         state["url"]: 뉴스 기사 URL
@@ -336,34 +334,121 @@ def fetch_html_node(state: UC3State) -> dict:
     출력:
         state["raw_html"]: 다운로드한 HTML
         state["site_name"]: 추출한 사이트 이름
+
+    Retry Logic:
+        - Permanent errors (400, 401, 403, 404): No retry
+        - Transient errors (429, 500, 502, 503, 504, timeout, connection): Retry with exponential backoff
+        - Max retries: 3 attempts
+        - Backoff: 1s, 2s, 4s
     """
     url = state["url"]
 
     logger.info(f"[UC3] HTML 다운로드 시작: {url}")
 
-    try:
-        response = requests.get(url, timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        })
-        response.raise_for_status()
+    # Permanent errors that should not be retried
+    permanent_status_codes = {400, 401, 403, 404, 410}
 
-        raw_html = response.text
-        site_name = extract_site_name(url)
+    # Transient errors that should be retried
+    transient_status_codes = {429, 500, 502, 503, 504}
 
-        logger.info(f"[UC3] HTML 다운로드 완료: {len(raw_html)} chars, site={site_name}")
+    max_retries = 3
+    last_error = None
 
-        return {
-            "raw_html": raw_html,
-            "site_name": site_name
-        }
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=10, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            })
+            response.raise_for_status()
 
-    except Exception as e:
-        logger.error(f"[UC3] HTML 다운로드 실패: {e}")
-        return {
-            "raw_html": "",
-            "site_name": extract_site_name(url),
-            "next_action": "human_review"
-        }
+            raw_html = response.text
+            site_name = extract_site_name(url)
+
+            logger.info(f"[UC3] ✅ HTML 다운로드 완료 (attempt={attempt+1}): {len(raw_html)} chars, site={site_name}")
+
+            return {
+                "raw_html": raw_html,
+                "site_name": site_name
+            }
+
+        except requests.exceptions.HTTPError as http_error:
+            last_error = http_error
+            status_code = http_error.response.status_code if http_error.response else None
+
+            # Permanent errors - do not retry
+            if status_code in permanent_status_codes:
+                logger.error(f"[UC3] ❌ Permanent HTTP error {status_code}: {url}")
+                error = HTMLFetchError(
+                    message=f"Permanent HTTP error: {status_code}",
+                    url=url,
+                    status_code=status_code,
+                    details={"error": str(http_error)}
+                )
+                user_message = format_error_for_user(error)
+                return {
+                    "raw_html": "",
+                    "site_name": extract_site_name(url),
+                    "next_action": "human_review",
+                    "error_message": user_message
+                }
+
+            # Transient errors - retry with exponential backoff
+            elif status_code in transient_status_codes:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1  # 1s, 2s, 4s
+                    logger.warning(f"[UC3] ⚠️ Transient HTTP error {status_code} (attempt={attempt+1}), retrying after {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"[UC3] ❌ Max retries reached for HTTP {status_code}: {url}")
+
+            else:
+                # Unknown status code - log and retry
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1
+                    logger.warning(f"[UC3] ⚠️ Unknown HTTP error {status_code} (attempt={attempt+1}), retrying after {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as conn_error:
+            # Network errors are transient - retry
+            last_error = conn_error
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 1
+                logger.warning(f"[UC3] ⚠️ Network error (attempt={attempt+1}), retrying after {wait_time}s: {conn_error}")
+                time.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"[UC3] ❌ Max retries reached for network error: {url}")
+
+        except Exception as generic_error:
+            # Unknown errors - log and retry
+            last_error = generic_error
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 1
+                logger.warning(f"[UC3] ⚠️ Unknown error (attempt={attempt+1}), retrying after {wait_time}s: {generic_error}")
+                time.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"[UC3] ❌ Max retries reached for unknown error: {url}")
+
+    # All retries failed
+    error = HTMLFetchError(
+        message=f"Failed to fetch HTML after {max_retries} attempts",
+        url=url,
+        status_code=getattr(last_error, 'response', None) and getattr(last_error.response, 'status_code', None),
+        details={"error": str(last_error)}
+    )
+    user_message = format_error_for_user(error)
+
+    logger.error(f"[UC3] ❌ HTML 다운로드 실패 (all retries exhausted): {user_message}")
+
+    return {
+        "raw_html": "",
+        "site_name": extract_site_name(url),
+        "next_action": "human_review",
+        "error_message": user_message
+    }
 
 
 def preprocess_html_node(state: UC3State) -> dict:
@@ -421,16 +506,10 @@ def gpt_discover_node(state: UC3State) -> dict:
 
     logger.info(f"[UC3] GPT-4o 분석 시작: site={site_name}")
 
-    # GPT-4o 초기화
+    # Import dependencies
     from langchain_openai import ChatOpenAI
-
-    llm = ChatOpenAI(
-        model="gpt-4o",
-        temperature=0,
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-
-    structured_llm = llm.with_structured_output(SiteStructureAnalysis)
+    from src.exceptions import OpenAIAPIError, is_retryable_error, format_error_for_user
+    import time
 
     # 프롬프트 생성
     prompt = f"""
@@ -483,28 +562,67 @@ Return structured output with:
 - reasoning (why you chose these selectors)
 """
 
-    try:
-        result: SiteStructureAnalysis = structured_llm.invoke(prompt)
+    # OpenAI API keys (primary + backup)
+    api_keys = [
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_API_KEY_BACKUP_1")
+    ]
+    api_keys = [key for key in api_keys if key]  # None 제거
 
-        logger.info(f"[UC3] GPT-4o 분석 완료:")
-        logger.info(f"  Title Selector: {result.title_selector}")
-        logger.info(f"  Body Selector: {result.body_selector}")
-        logger.info(f"  Date Selector: {result.date_selector}")
-        logger.info(f"  Confidence: {result.confidence:.2f}")
-        logger.info(f"  Reasoning: {result.reasoning[:100]}...")
+    # Retry logic with fallback
+    max_retries = 3
+    last_error = None
 
-        return {
-            "gpt_analysis": result.dict(),
-            "confidence": result.confidence
-        }
+    for key_idx, api_key in enumerate(api_keys):
+        for attempt in range(max_retries):
+            try:
+                # GPT-4o 초기화 (timeout 30초)
+                llm = ChatOpenAI(
+                    model="gpt-4o",
+                    temperature=0,
+                    api_key=api_key,
+                    timeout=30.0
+                )
 
-    except Exception as e:
-        logger.error(f"[UC3] GPT-4o 분석 실패: {e}")
-        return {
-            "gpt_analysis": {},
-            "confidence": 0.0,
-            "next_action": "human_review"
-        }
+                structured_llm = llm.with_structured_output(SiteStructureAnalysis)
+                result: SiteStructureAnalysis = structured_llm.invoke(prompt)
+
+                logger.info(f"[UC3] ✅ GPT-4o 분석 완료 (key={key_idx+1}, attempt={attempt+1}):")
+                logger.info(f"  Title Selector: {result.title_selector}")
+                logger.info(f"  Body Selector: {result.body_selector}")
+                logger.info(f"  Date Selector: {result.date_selector}")
+                logger.info(f"  Confidence: {result.confidence:.2f}")
+                logger.info(f"  Reasoning: {result.reasoning[:100]}...")
+
+                return {
+                    "gpt_analysis": result.dict(),
+                    "confidence": result.confidence
+                }
+
+            except Exception as raw_error:
+                last_error = raw_error
+                error = OpenAIAPIError.from_openai_error(raw_error)
+
+                # Retry 가능한 오류인가?
+                if is_retryable_error(error) and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1  # 1s, 2s, 4s
+                    logger.warning(f"[UC3] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"[UC3] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}")
+                    break  # 다음 API 키로
+
+    # 모든 API 키와 재시도 실패
+    user_message = format_error_for_user(OpenAIAPIError.from_openai_error(last_error) if last_error else Exception("Unknown error"))
+    logger.error(f"[UC3] ❌ All API keys exhausted. Last error: {user_message}")
+
+    return {
+        "gpt_analysis": {},
+        "confidence": 0.0,
+        "error_message": f"GPT-4o discovery failed: {user_message}",
+        "next_action": "human_review"
+    }
 
 
 def validate_selectors_node(state: UC3State) -> dict:
@@ -1083,15 +1201,12 @@ def gpt_discover_agent_node(state: UC3State) -> dict:
     # Simplified approach: GPT-4o directly analyzes tool results without agent framework
     # (Agent framework로 하면 복잡하므로 직접 LLM 호출)
 
-    try:
-        gpt_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    # Few-Shot 섹션
+    few_shot_section = ""
+    if few_shot_examples and len(few_shot_examples) > 0:
+        few_shot_section = format_few_shot_prompt(few_shot_examples, include_patterns=True)
 
-        # Few-Shot 섹션
-        few_shot_section = ""
-        if few_shot_examples and len(few_shot_examples) > 0:
-            few_shot_section = format_few_shot_prompt(few_shot_examples, include_patterns=True)
-
-        prompt = f"""You are a CSS Selector discovery expert.
+    prompt = f"""You are a CSS Selector discovery expert.
 
 {few_shot_section}
 
@@ -1123,37 +1238,82 @@ Generate CSS selectors for title, body, and date based on the above information.
 - Provide clear reasoning for each selector choice
 """
 
-        response = gpt_llm.invoke([{"role": "user", "content": prompt}])
+    # OpenAI API keys (primary + backup)
+    api_keys = [
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_API_KEY_BACKUP_1")
+    ]
+    api_keys = [key for key in api_keys if key]  # None 제거
 
-        # JSON 파싱
-        try:
-            gpt_output = json.loads(response.content)
-        except:
-            # Fallback: extract JSON from markdown code block
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
-            if json_match:
-                gpt_output = json.loads(json_match.group(1))
-            else:
-                raise ValueError("Failed to parse GPT-4o JSON response")
-
-        overall_conf = gpt_output.get('overall_confidence', 0.0)
-
-        logger.info(f"[UC3 Agent 1] ✅ GPT-4o 제안 완료: confidence={overall_conf:.2f}")
-
+    if not api_keys:
+        logger.error("[UC3 Agent 1] ❌ No OpenAI API keys available")
         return {
             **state,
-            "gpt_proposal": gpt_output,
-            "gpt_confidence": overall_conf
-        }
-
-    except Exception as e:
-        logger.error(f"[UC3 Agent 1] GPT-4o discovery failed: {e}")
-        return {
-            **state,
-            "gpt_proposal": {"error": str(e)},
+            "gpt_proposal": {"error": "No OpenAI API keys configured"},
             "gpt_confidence": 0.0
         }
+
+    # Retry logic with fallback
+    max_retries = 3
+    last_error = None
+
+    for key_idx, api_key in enumerate(api_keys):
+        for attempt in range(max_retries):
+            try:
+                gpt_llm = ChatOpenAI(
+                    model="gpt-4o",
+                    temperature=0,
+                    api_key=api_key,
+                    timeout=30.0
+                )
+
+                response = gpt_llm.invoke([{"role": "user", "content": prompt}])
+
+                # JSON 파싱
+                try:
+                    gpt_output = json.loads(response.content)
+                except:
+                    # Fallback: extract JSON from markdown code block
+                    import re
+                    json_match = re.search(r'```json\n(.*?)\n```', response.content, re.DOTALL)
+                    if json_match:
+                        gpt_output = json.loads(json_match.group(1))
+                    else:
+                        raise ValueError("Failed to parse GPT-4o JSON response")
+
+                overall_conf = gpt_output.get('overall_confidence', 0.0)
+
+                logger.info(f"[UC3 Agent 1] ✅ GPT-4o 제안 완료 (key={key_idx+1}, attempt={attempt+1}): confidence={overall_conf:.2f}")
+
+                return {
+                    **state,
+                    "gpt_proposal": gpt_output,
+                    "gpt_confidence": overall_conf
+                }
+
+            except Exception as raw_error:
+                last_error = raw_error
+                error = OpenAIAPIError.from_openai_error(raw_error)
+
+                # Retry 가능한 오류인가? (429 Rate Limit, 503/504 Server Error)
+                if is_retryable_error(error) and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"[UC3 Agent 1] ⚠️ Retryable error (key={key_idx+1}, attempt={attempt+1}), waiting {wait_time}s: {error}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"[UC3 Agent 1] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}")
+                    break  # 다음 API 키로
+
+    # 모든 API 키와 재시도 실패
+    user_message = format_error_for_user(OpenAIAPIError.from_openai_error(last_error))
+    logger.error(f"[UC3 Agent 1] ❌ All API keys exhausted: {user_message}")
+
+    return {
+        **state,
+        "gpt_proposal": {"error": user_message},
+        "gpt_confidence": 0.0
+    }
 
 
 # --- Agent 2: Gemini Validator (with Validation Tool) ---

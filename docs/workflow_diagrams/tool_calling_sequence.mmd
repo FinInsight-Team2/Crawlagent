@@ -1,0 +1,38 @@
+
+sequenceDiagram
+    participant User
+    participant UC3 as UC3 Workflow
+    participant Tool1 as preprocess_html
+    participant Tool2 as analyze_dom_patterns
+    participant Tool3 as get_few_shot_examples
+    participant GPT as GPT-4o Discoverer
+    participant ValidTool as validate_selector_tool
+    participant Gemini as Gemini-2.5-pro
+
+    User->>UC3: 신규 사이트 URL
+    UC3->>UC3: fetch_html_node()
+
+    UC3->>Tool1: HTML 전처리
+    Tool1-->>UC3: 정제된 HTML<br/>(Token 50-80% 감소)
+
+    UC3->>Tool2: DOM 통계 분석
+    Tool2-->>UC3: Title/Body/Date 후보<br/>(각 Top 3)
+
+    UC3->>Tool3: Few-Shot 검색
+    Tool3-->>UC3: 5개 성공 패턴
+
+    UC3->>GPT: DOM 분석 + Few-Shot<br/>→ Selector 제안
+    GPT-->>UC3: CSS Selectors<br/>+ Confidence
+
+    UC3->>ValidTool: 제안된 Selector 테스트
+    ValidTool-->>UC3: 추출 결과<br/>+ Quality Score
+
+    UC3->>Gemini: 추출 결과 검증<br/>+ Best Selector 선택
+    Gemini-->>UC3: Validation Result<br/>+ Consensus
+
+    alt Consensus ≥ 0.55
+        UC3->>UC3: DB 저장
+        UC3-->>User: ✅ 성공
+    else Consensus < 0.55
+        UC3-->>User: ❌ 실패<br/>(수동 검토 필요)
+    end

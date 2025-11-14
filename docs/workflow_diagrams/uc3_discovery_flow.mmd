@@ -1,0 +1,36 @@
+
+graph TD
+    Start([신규 사이트<br/>URL 입력]) --> FetchHTML[HTML 다운로드]
+
+    FetchHTML --> Preprocess[Tool 1: preprocess_html<br/>Script/Style 제거<br/>Token 50-80% 감소]
+
+    Preprocess --> DOMAnalyze[Tool 2: BeautifulSoup<br/>DOM 통계 분석<br/>Title/Body/Date 후보 추출]
+
+    DOMAnalyze --> LoadFewShot[Tool 3: Few-Shot Retriever<br/>DB 성공 패턴 로드]
+
+    LoadFewShot --> GPTDiscover[Agent 1: GPT-4o Discoverer<br/>DOM 분석 + Few-Shot 학습<br/>→ CSS Selector 제안]
+
+    GPTDiscover --> ValidateTools[실제 HTML에서<br/>Selector 테스트]
+
+    ValidateTools --> GeminiValidator[Agent 2: Gemini-2.5-pro<br/>추출 결과 검증<br/>Best Selectors 선택]
+
+    GeminiValidator --> CalcConsensus[Consensus Score 계산<br/>= GPT × 0.3<br/>+ Gemini × 0.3<br/>+ Extraction × 0.4]
+
+    CalcConsensus --> ConsensusCheck{Consensus<br/>≥ 0.55?}
+
+    ConsensusCheck -->|Yes ✅| SaveNewSite[DB에 신규 사이트 등록<br/>Selector 저장]
+    ConsensusCheck -->|No ❌| ManualReview[수동 검토 필요<br/>DecisionLog 기록]
+
+    SaveNewSite --> RetryUC1[UC1로 재시도<br/>이제 알려진 사이트]
+
+    RetryUC1 --> Success([성공])
+    ManualReview --> End2([실패 - 수동 확인])
+
+    style Start fill:#8b5cf6
+    style Success fill:#10b981
+    style Preprocess fill:#3b82f6
+    style DOMAnalyze fill:#3b82f6
+    style LoadFewShot fill:#3b82f6
+    style GPTDiscover fill:#8b5cf6
+    style GeminiValidator fill:#f59e0b
+    style SaveNewSite fill:#10b981

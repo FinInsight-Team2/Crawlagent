@@ -1,0 +1,26 @@
+
+graph TD
+    Start([신규 사이트<br/>크롤링 성공]) --> SaveDB[DB에 Selector 저장<br/>+ Success Pattern]
+
+    SaveDB --> BuildPool[Few-Shot Examples Pool<br/>누적 증가]
+
+    BuildPool --> NextRequest[다음 요청<br/>신규 사이트 또는 UC2]
+
+    NextRequest --> Retrieve[Few-Shot Retriever<br/>유사 패턴 검색<br/>최대 5개]
+
+    Retrieve --> EnrichPrompt[GPT/Gemini 프롬프트<br/>Few-Shot Examples 포함]
+
+    EnrichPrompt --> BetterAccuracy[정확도 향상<br/>+10-20%]
+
+    BetterAccuracy --> MoreSuccess[더 많은 성공]
+
+    MoreSuccess --> SaveDB
+
+    style Start fill:#10b981
+    style BuildPool fill:#3b82f6
+    style BetterAccuracy fill:#f59e0b
+    style MoreSuccess fill:#10b981
+
+    Note1[자가 개선 루프:<br/>성공 → 패턴 저장 → 학습 → 정확도 향상 → 더 많은 성공]
+
+    BuildPool -.-> Note1

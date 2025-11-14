@@ -37,6 +37,7 @@ from typing import Tuple
 import subprocess
 import os
 import json
+import logging
 
 from src.storage.database import get_db
 from src.storage.models import CrawlResult, Selector, DecisionLog
@@ -44,7 +45,11 @@ from src.agents.uc1_quality_gate import validate_quality
 from src.agents.nlp_search import parse_natural_query
 from src.ui.theme import CrawlAgentDarkTheme, get_custom_css
 from src.workflow.master_crawl_workflow import build_master_graph
+from src.diagnosis import ErrorClassifier, FailureCategory, FailureAnalyzer, RecommendationEngine
 import requests
+
+# Logger 설정
+logger = logging.getLogger(__name__)
 # from src.ui.sample_urls import get_sample_choices, get_sample_url  # 제거: 불필요
 
 # 프로젝트 루트 경로
@@ -149,6 +154,30 @@ def download_csv(df: pd.DataFrame) -> str:
     return temp_file.name
 
 
+def download_json(df: pd.DataFrame) -> str:
+    """
+    DataFrame을 JSON 파일로 변환하여 임시 파일 경로 반환
+
+    Args:
+        df: 다운로드할 DataFrame
+
+    Returns:
+        str: 임시 JSON 파일 경로
+
+    Examples:
+        >>> df = pd.DataFrame({"title": ["News 1"], "body": ["Body 1"]})
+        >>> json_path = download_json(df)
+        >>> print(json_path)  # /tmp/tmpXXXXXX.json
+    """
+    if df.empty:
+        return None
+
+    import tempfile
+    temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', encoding='utf-8')
+    df.to_json(temp_file.name, orient='records', force_ascii=False, indent=2)
+    return temp_file.name
+
+
 def get_stats_summary() -> dict:
     """
     전체 데이터베이스 통계 요약 조회
@@ -189,6 +218,314 @@ def get_stats_summary() -> dict:
         }
     except Exception as e:
         return {"total": 0, "avg_quality": 0, "category_stats": {}}
+
+
+def run_quick_uc_test(url: str) -> Tuple[str, str]:
+    """
+    Master Graph 워크플로우 실행 (UC1→UC2→UC3)
+
+    Args:
+        url: 테스트할 뉴스 기사 URL
+
+    Returns:
+        Tuple[str, str]: (HTML 결과, 상세 로그)
+    """
+    import requests
+    import time
+    import os
+    from io import StringIO
+    import logging
+
+    if not url or not url.startswith("http"):
+        error_html = """
+        <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    padding: 20px; border-radius: 12px; color: white;'>
+            <h3>❌ 오류: 유효하지 않은 URL</h3>
+            <p>올바른 URL을 입력하세요 (예: https://news.naver.com/...)</p>
+        </div>
+        """
+        return error_html, "Invalid URL provided"
+
+    # 로그 캡처 설정
+    log_capture = StringIO()
+    log_handler = logging.StreamHandler(log_capture)
+    log_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_handler.setFormatter(formatter)
+
+    # 루트 로거에 핸들러 추가
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(log_handler)
+
+    try:
+        start_time = time.time()
+
+        # 1. Master Graph 빌드
+        master_app = build_master_graph()
+
+        # 2. HTML 다운로드 (retry logic 포함)
+        logger.info(f"[Quick Test] Fetching HTML from {url}")
+
+        permanent_status_codes = {400, 401, 403, 404, 410}
+        transient_status_codes = {429, 500, 502, 503, 504}
+        max_retries = 3
+        html_content = None
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, timeout=10, headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                })
+                response.raise_for_status()
+                html_content = response.text
+                logger.info(f"[Quick Test] ✅ HTML fetched (attempt={attempt+1})")
+                break
+
+            except requests.exceptions.HTTPError as http_error:
+                last_error = http_error
+                status_code = http_error.response.status_code if http_error.response else None
+
+                if status_code in permanent_status_codes:
+                    logger.error(f"[Quick Test] ❌ Permanent HTTP error {status_code}")
+                    raise
+
+                elif status_code in transient_status_codes:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 1
+                        logger.warning(f"[Quick Test] ⚠️ Transient HTTP error {status_code}, retrying...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as conn_error:
+                last_error = conn_error
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 1
+                    logger.warning(f"[Quick Test] ⚠️ Network error, retrying...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
+
+        if html_content is None:
+            raise Exception(f"Failed to fetch HTML after {max_retries} attempts")
+
+        # 3. 사이트 이름 추출
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        site_name = parsed.netloc.replace("www.", "").split(".")[0]
+
+        # 4. 초기 State
+        from src.workflow.master_crawl_workflow import MasterCrawlState
+
+        initial_state: MasterCrawlState = {
+            "url": url,
+            "site_name": site_name,
+            "html_content": html_content,
+            "current_uc": None,
+            "next_action": None,
+            "failure_count": 0,
+            "uc1_validation_result": None,
+            "uc2_consensus_result": None,
+            "uc3_discovery_result": None,
+            "final_result": None,
+            "error_message": None,
+            "workflow_history": []
+        }
+
+        # 5. Master Graph 실행
+        logger.info("[Quick Test] 🚀 Running Master Graph...")
+        final_state = master_app.invoke(initial_state)
+
+        elapsed = time.time() - start_time
+
+        # 6. 결과 HTML 생성
+        workflow_history = final_state.get("workflow_history", [])
+        final_result = final_state.get("final_result")
+        error_message = final_state.get("error_message")
+
+        # LangSmith 링크 생성
+        langsmith_url = os.getenv("LANGSMITH_URL", "https://smith.langchain.com")
+        langsmith_link = f"{langsmith_url}" if os.getenv("LANGCHAIN_TRACING_V2") == "true" else None
+
+        if final_result:
+            # 성공 케이스
+            result_html = f"""
+            <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        padding: 20px; border-radius: 12px; color: white; margin-bottom: 10px;'>
+                <h3>✅ 크롤링 성공! ({elapsed:.2f}초)</h3>
+                <p><strong>워크플로우:</strong> {' → '.join(workflow_history)}</p>
+                {f'<p><a href="{langsmith_link}" target="_blank" style="color: #ffd700;">🔗 LangSmith 추적 보기</a></p>' if langsmith_link else ''}
+            </div>
+
+            <div style='background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-top: 10px;'>
+                <h4>📰 추출된 기사</h4>
+                <p><strong>제목:</strong> {final_result.get('title', 'N/A')[:100]}</p>
+                <p><strong>발행일:</strong> {final_result.get('date', 'N/A')}</p>
+                <p><strong>본문 미리보기:</strong> {final_result.get('body', 'N/A')[:200]}...</p>
+                <p><strong>품질 점수:</strong> {final_result.get('quality_score', 0)}/100</p>
+            </div>
+            """
+        else:
+            # 실패 케이스 - 진단 시스템 적용
+            # 컨텍스트 구성
+            diagnostic_context = {
+                "http_status": getattr(last_error, 'status_code', None) if 'last_error' in locals() else None,
+                "consensus_score": None,
+                "quality_score": None,
+                "extraction_result": final_result,
+                "exception": error_message or "Unknown error",
+                "workflow_history": workflow_history
+            }
+
+            # UC별 컨텍스트 추가
+            if final_state.get("uc1_validation_result"):
+                diagnostic_context["quality_score"] = final_state["uc1_validation_result"].get("quality_score")
+
+            if final_state.get("uc2_consensus_result"):
+                uc2_result = final_state["uc2_consensus_result"]
+                diagnostic_context["consensus_score"] = uc2_result.get("consensus_score")
+                diagnostic_context["gpt_confidence"] = uc2_result.get("gpt_confidence", 0.0)
+                diagnostic_context["gemini_confidence"] = uc2_result.get("gemini_confidence", 0.0)
+                diagnostic_context["extraction_quality"] = uc2_result.get("extraction_quality", 0.0)
+                diagnostic_context["threshold"] = 0.5
+
+            if final_state.get("uc3_discovery_result"):
+                uc3_result = final_state["uc3_discovery_result"]
+                diagnostic_context["consensus_score"] = uc3_result.get("consensus_score")
+                diagnostic_context["gpt_confidence"] = uc3_result.get("gpt_confidence", 0.0)
+                diagnostic_context["gemini_confidence"] = uc3_result.get("gemini_confidence", 0.0)
+                diagnostic_context["extraction_quality"] = uc3_result.get("extraction_quality", 0.0)
+                diagnostic_context["threshold"] = 0.55
+
+            # 1. 실패 분류
+            category = ErrorClassifier.classify(Exception(error_message), diagnostic_context)
+            category_name = ErrorClassifier.get_category_display_name(category)
+            category_icon = ErrorClassifier.get_category_icon(category)
+
+            # 2. 상세 분석
+            analysis_html = ""
+            if category == FailureCategory.CONSENSUS_FAILURE and diagnostic_context.get("consensus_score") is not None:
+                analysis = FailureAnalyzer.analyze_consensus_failure(
+                    gpt_confidence=diagnostic_context.get("gpt_confidence", 0.0),
+                    gemini_confidence=diagnostic_context.get("gemini_confidence", 0.0),
+                    extraction_quality=diagnostic_context.get("extraction_quality", 0.0),
+                    threshold=diagnostic_context.get("threshold", 0.5),
+                    use_case="UC3" if diagnostic_context.get("threshold") == 0.55 else "UC2"
+                )
+
+                analysis_html = f"""
+                <div style='background: rgba(255,255,255,0.05); padding: 15px; border-radius: 6px; margin: 15px 0;'>
+                    <h4 style='margin-top: 0; color: #f59e0b;'>📊 상세 분석</h4>
+                    <p><strong>Consensus Score:</strong> {analysis['score']:.3f} (임계값: {analysis['threshold']})</p>
+                    <p><strong>부족분:</strong> {analysis['gap']:.3f}</p>
+
+                    <div style='margin: 10px 0;'>
+                        <p style='margin: 5px 0;'><strong>구성 요소:</strong></p>
+                        <ul style='margin: 5px 0; padding-left: 20px;'>
+                            <li>GPT 기여도: {analysis['breakdown']['gpt_contribution']:.3f} (신뢰도 {analysis['breakdown']['gpt_confidence']:.3f} × 0.3)</li>
+                            <li>Gemini 기여도: {analysis['breakdown']['gemini_contribution']:.3f} (신뢰도 {analysis['breakdown']['gemini_confidence']:.3f} × 0.3)</li>
+                            <li>추출 품질 기여도: {analysis['breakdown']['extraction_contribution']:.3f} (품질 {analysis['breakdown']['extraction_quality']:.3f} × 0.4)</li>
+                        </ul>
+                    </div>
+
+                    <p style='margin-top: 10px;'><strong>원인:</strong> {analysis['explanation']}</p>
+                </div>
+                """
+
+            elif category == FailureCategory.QUALITY_FAILURE and diagnostic_context.get("quality_score") is not None:
+                extraction = final_result or {}
+                analysis = FailureAnalyzer.analyze_quality_failure(
+                    title=extraction.get("title", ""),
+                    body=extraction.get("body", ""),
+                    date=extraction.get("date"),
+                    url=url,
+                    quality_score=diagnostic_context["quality_score"]
+                )
+
+                analysis_html = f"""
+                <div style='background: rgba(255,255,255,0.05); padding: 15px; border-radius: 6px; margin: 15px 0;'>
+                    <h4 style='margin-top: 0; color: #f59e0b;'>📊 품질 점수 분석</h4>
+                    <p><strong>총점:</strong> {analysis['quality_score']}/100 (임계값: 80)</p>
+                    <p><strong>부족분:</strong> {analysis['gap']}점</p>
+
+                    <div style='margin: 10px 0;'>
+                        <p style='margin: 5px 0;'><strong>세부 점수:</strong></p>
+                        <ul style='margin: 5px 0; padding-left: 20px;'>
+                            <li>제목: {analysis['breakdown']['title_score']}/20 (길이: {analysis['breakdown']['title_length']}자)</li>
+                            <li>본문: {analysis['breakdown']['body_score']}/60 (길이: {analysis['breakdown']['body_length']}자)</li>
+                            <li>날짜: {analysis['breakdown']['date_score']}/10 ({'있음' if analysis['breakdown']['has_date'] else '없음'})</li>
+                            <li>URL: {analysis['breakdown']['url_score']}/10</li>
+                        </ul>
+                    </div>
+
+                    <p style='margin-top: 10px;'><strong>원인:</strong> {analysis['explanation']}</p>
+                </div>
+                """
+
+            # 3. 해결 방안 제안
+            recommendations = RecommendationEngine.get_recommendations(category, diagnostic_context)
+            recommendations_html = RecommendationEngine.format_recommendations_html(recommendations)
+
+            # 4. 최종 HTML 생성
+            result_html = f"""
+            <div style='background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                        padding: 20px; border-radius: 12px; color: white; margin-bottom: 10px;'>
+                <h3>❌ 크롤링 실패 ({elapsed:.2f}초)</h3>
+                <p><strong>워크플로우:</strong> {' → '.join(workflow_history)}</p>
+                <p><strong>실패 유형:</strong> {category_icon} {category_name}</p>
+                <p><strong>오류:</strong> {error_message or 'Unknown error'}</p>
+                {f'<p><a href="{langsmith_link}" target="_blank" style="color: #ffd700;">🔗 LangSmith 추적 보기</a></p>' if langsmith_link else ''}
+            </div>
+
+            {analysis_html}
+
+            {recommendations_html}
+            """
+
+        # 로그 캡처
+        log_content = log_capture.getvalue()
+
+        # 핸들러 제거
+        root_logger.removeHandler(log_handler)
+        root_logger.setLevel(original_level)
+
+        return result_html, log_content
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+
+        # 오류 HTML 생성
+        error_html = f"""
+        <div style='background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                    padding: 20px; border-radius: 12px; color: white;'>
+            <h3>❌ 실행 오류 ({elapsed:.2f}초)</h3>
+            <p><strong>오류:</strong> {str(e)}</p>
+
+            <div style='background: rgba(255,255,255,0.1); padding: 10px; border-radius: 6px; margin-top: 10px;'>
+                <h4>💡 해결 방법</h4>
+                <ul>
+                    <li>API 키 설정 확인 (OPENAI_API_KEY, GOOGLE_API_KEY)</li>
+                    <li>데이터베이스 연결 확인</li>
+                    <li>네트워크 연결 확인</li>
+                    <li>상세 로그 확인</li>
+                </ul>
+            </div>
+        </div>
+        """
+
+        # 로그 캡처
+        log_content = log_capture.getvalue()
+
+        # 핸들러 제거
+        root_logger.removeHandler(log_handler)
+        root_logger.setLevel(original_level)
+
+        return error_html, log_content
 
 
 # ========================================
@@ -290,439 +627,17 @@ def create_app():
                             show_copy_button=True
                         )
 
-                gr.Markdown("---")
-
-                # 테스트 크롤링
-                gr.Markdown("### 1️⃣ 테스트 크롤링 (단일 URL - Scrapy 사용)")
-                gr.Markdown("GPT-4o-mini가 콘텐츠 품질을 실시간으로 검증합니다 (5W1H 기반 점수 계산)")
-
-                # URL 입력
-                single_url = gr.Textbox(
-                    label="📎 기사 URL",
-                    placeholder="예: https://www.yna.co.kr/view/AKR20251104...",
-                    lines=2
-                )
-
-                # 카테고리 및 실행 버튼
-                with gr.Row():
-                    single_category = gr.Dropdown(
-                        label="📂 카테고리",
-                        choices=["politics", "economy", "society", "international"],
-                        value="economy",
-                        scale=2
-                    )
-                    single_crawl_btn = gr.Button("🚀 지금 크롤링", variant="primary", size="lg", scale=1)
-
-                # 사용 가이드 (접을 수 있음)
-                with gr.Accordion("📖 사용 가이드", open=False):
-                    gr.Markdown("""
-                    **테스트 크롤링 사용법**
-                    1. 연합뉴스 기사 URL 입력
-                    2. 카테고리 선택 (경제/정치/사회/국제)
-                    3. "지금 크롤링" 버튼 클릭
-                    4. 3-5초 후 결과 확인
-
-                    **AI 품질 검증 방식**
-                    - AI가 실시간으로 뉴스 품질 판단
-                    - 5W1H 점수 계산: 제목(20) + 본문(60) + 날짜(10) + URL(10)
-                    - 95점 이상: 저장 / 미만: 자동 복구 시도
-                    """)
-
-                # Progress 표시기 추가
-                single_progress = gr.Progress()
-
-                single_output = gr.HTML(label="실시간 크롤링 결과")
-
-                # 로그 출력 영역 (기본 열림)
-                with gr.Accordion("📋 실시간 로그", open=True):
-                    single_log = gr.Textbox(
-                        label="실시간 로그",
-                        lines=15,
-                        max_lines=20,
-                        interactive=False,
-                        show_copy_button=True
-                    )
-
-                # 실시간 크롤링 함수
-                def run_single_crawl(url: str, category: str, progress=single_progress) -> Tuple[str, str]:
-                    """
-                    단일 URL 크롤링 + UC1 검증 함수 (Gradio 연동)
-
-                    Args:
-                        url: 크롤링할 기사 URL
-                        category: 카테고리 (politics/economy/society/international)
-
-                    Returns:
-                        Tuple[str, str]: (HTML 결과 메시지, 로그 텍스트)
-                    """
-                    if not url:
-                        gr.Warning("⚠️ URL을 입력해주세요")
-                        return (
-                            """<div class='status-box status-warning'>
-                            <h3 style='margin: 0;'>⚠️ URL 입력 필요</h3>
-                            </div>""",
-                            ""
-                        )
-
-                    try:
-                        # Progress: 시작
-                        progress(0, desc="🚀 크롤링 시작 중...")
-                        start_time = datetime.now()
-
-                        # Progress: HTML 페칭
-                        progress(0.2, desc="📡 HTML 페이지 가져오는 중...")
-
-                        # Scrapy 크롤링
-                        cmd = [
-                            "poetry", "run", "scrapy", "crawl", "yonhap",
-                            "-a", f"start_urls={url}",
-                            "-a", f"category={category}",
-                            "-s", "CLOSESPIDER_ITEMCOUNT=1"
-                        ]
-
-                        # Progress: Scrapy 실행
-                        progress(0.4, desc="🕷️ Scrapy 크롤러 실행 중...")
-
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=30,
-                            cwd=PROJECT_ROOT
-                        )
-
-                        # Progress: UC1 검증
-                        progress(0.7, desc="🤖 GPT-4o-mini 품질 검증 중...")
-
-                        elapsed = (datetime.now() - start_time).total_seconds()
-
-                        # 로그 추출 (중요한 부분만)
-                        log_lines = result.stdout.split('\n') if result.stdout else []
-                        important_logs = []
-                        for line in log_lines:
-                            # 핵심 키워드만 필터링 (로그 폭발 방지)
-                            if any(keyword in line for keyword in [
-                                'UC1 Quality Gate', 'REJECT', 'ERROR', 'Spider closed'
-                            ]):
-                                # 타임스탬프 제거
-                                if '[yonhap]' in line:
-                                    # "2025-11-04 08:15:02 [yonhap] INFO:" 형식에서 날짜/시간 제거
-                                    parts = line.split('[yonhap]')
-                                    if len(parts) > 1:
-                                        clean_line = '[yonhap]' + parts[1]
-                                        important_logs.append(clean_line.strip())
-                                elif '| INFO |' in line or '| WARNING |' in line:
-                                    # loguru 형식 로그 정리
-                                    if '-' in line:
-                                        msg = line.split('-', 1)[-1].strip()
-                                        important_logs.append(msg)
-                                else:
-                                    important_logs.append(line.strip())
-
-                        log_output = '\n'.join(important_logs[-50:]) if important_logs else "로그를 찾을 수 없습니다"  # 최근 50줄
-
-                        # Progress: DB 확인
-                        progress(0.9, desc="💾 데이터베이스 확인 중...")
-
-                        # DB 확인
-                        db = next(get_db())
-                        article = db.query(CrawlResult).filter(CrawlResult.url == url).first()
-
-                        # Progress: 완료
-                        progress(1.0, desc="✅ 완료!")
-
-                        if article:
-                            gr.Info(f"✅ 크롤링 성공! 품질 점수: {article.quality_score}/100")
-                            # UC1 결과 파싱
-                            reasoning = article.llm_reasoning or "N/A"
-
-                            html_output = f"""
-                            <div class='status-box status-success'>
-                                <h3 style='margin: 0 0 15px 0;'>✅ 크롤링 성공!</h3>
-
-                                <div style='background: rgba(255,255,255,0.05); padding: 15px; border-radius: 6px; margin: 10px 0;'>
-                                    <p style='margin: 5px 0;'><strong>📰 제목:</strong> {article.title[:100]}...</p>
-                                    <p style='margin: 5px 0;'><strong>📂 카테고리:</strong> {article.category_kr or article.category}</p>
-                                    <p style='margin: 5px 0;'><strong>📅 발행일:</strong> {article.article_date}</p>
-                                    <p style='margin: 5px 0;'><strong>⭐ 품질 점수:</strong> <span style='font-size: 1.3em; color: #10b981;'>{article.quality_score}/100</span></p>
-                                    <p style='margin: 5px 0;'><strong>⏱️ 소요 시간:</strong> {elapsed:.1f}초</p>
-                                </div>
-
-                                <div style='background: rgba(255,255,255,0.03); padding: 15px; border-radius: 6px; margin: 10px 0;'>
-                                    <h4 style='margin: 0 0 10px 0;'>🤖 AI 품질 검증 판단</h4>
-                                    <p style='margin: 5px 0; white-space: pre-wrap; opacity: 0.9;'>{reasoning}</p>
-                                </div>
-                            </div>
-                            """
-                            return (html_output, log_output)
-                        else:
-                            gr.Warning("⚠️ AI 품질 기준 미달로 저장되지 않았습니다")
-                            html_output = f"""
-                            <div class='status-box status-error'>
-                                <h3 style='margin: 0;'>❌ 크롤링 실패</h3>
-                                <p style='margin: 10px 0 0 0;'>AI가 품질 기준 미달로 판단하여 저장하지 않았습니다.</p>
-                            </div>
-                            """
-                            return (html_output, log_output)
-
-                    except subprocess.TimeoutExpired:
-                        gr.Error("⏱️ 타임아웃 (30초 초과) - 다시 시도해주세요")
-                        return (
-                            """<div class='status-box status-error'>
-                            <h3 style='margin: 0;'>⏱️ 타임아웃 (30초 초과)</h3>
-                            </div>""",
-                            "타임아웃 발생"
-                        )
-                    except Exception as e:
-                        gr.Error(f"❌ 오류 발생: {str(e)}")
-                        return (
-                            f"""<div class='status-box status-error'>
-                            <h3 style='margin: 0;'>❌ 오류 발생</h3>
-                            <p style='margin: 10px 0 0 0;'>{str(e)}</p>
-                            </div>""",
-                            f"에러: {str(e)}"
-                        )
-
-                # 빠른 UC 테스트 함수
-                def run_quick_uc_test(url: str) -> Tuple[str, str]:
-                    """
-                    아무 URL로 Master Graph UC1/UC2/UC3 빠른 테스트
-
-                    Args:
-                        url: 테스트할 URL (아무 뉴스 사이트 가능)
-
-                    Returns:
-                        Tuple[str, str]: (HTML 결과, 로그)
-                    """
-                    if not url:
-                        return (
-                            """<div class='status-box status-warning'>
-                            <h3>⚠️ URL을 입력하세요</h3>
-                            </div>""",
-                            ""
-                        )
-
-                    log_lines = []
-                    try:
-                        from urllib.parse import urlparse
-                        import requests
-
-                        # 1. URL 파싱
-                        parsed = urlparse(url)
-                        site_name = parsed.netloc.replace('www.', '').split('.')[0]
-                        log_lines.append(f"[INFO] URL: {url}")
-                        log_lines.append(f"[INFO] Site: {site_name}")
-
-                        # 2. HTML 다운로드
-                        log_lines.append("[INFO] 📡 HTML 다운로드 중...")
-                        response = requests.get(url, timeout=10)
-                        html = response.text
-                        log_lines.append(f"[INFO] ✅ HTML 다운로드 완료 ({len(html)} bytes)")
-
-                        # 3. Master Graph 실행
-                        log_lines.append("[INFO] 🚀 Master Graph 워크플로우 시작...")
-                        master_app = build_master_graph()
-
-                        initial_state = {
-                            "url": url,
-                            "site_name": site_name,
-                            "html_content": html,
-                            "raw_html": html,
-                            "current_uc": None,
-                            "next_action": None,
-                            "failure_count": 0,
-                            "uc1_validation_result": None,
-                            "uc2_consensus_result": None,
-                            "uc3_discovery_result": None,
-                            "final_result": None,
-                            "error_message": None,
-                            "workflow_history": [],
-                        }
-
-                        log_lines.append("[INFO] 🎯 Supervisor → UC1/UC2/UC3 실행 중...")
-                        final_state = master_app.invoke(initial_state)
-
-                        # 4. 결과 파싱
-                        workflow_history = final_state.get("workflow_history", [])
-                        for step in workflow_history:
-                            log_lines.append(f"[WORKFLOW] {step}")
-
-                        # UC 실행 결과
-                        uc1_result = final_state.get("uc1_validation_result")
-                        uc2_result = final_state.get("uc2_consensus_result")
-                        uc3_result = final_state.get("uc3_discovery_result")
-                        final_result = final_state.get("final_result")
-
-                        # HTML 결과 생성 (UC별 색상 카드)
-                        result_html = "<div style='margin: 20px 0;'>"
-                        result_html += "<h3 style='margin-bottom: 20px;'>✅ Master Graph 실행 완료</h3>"
-
-                        # 워크플로우 히스토리 (플로우차트 스타일)
-                        if workflow_history:
-                            result_html += "<div style='background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px; margin-bottom: 20px;'>"
-                            result_html += "<h4 style='margin: 0 0 10px 0;'>📊 실행 경로</h4>"
-                            result_html += "<div style='font-family: monospace; font-size: 0.9em;'>"
-                            for i, step in enumerate(workflow_history):
-                                arrow = " → " if i < len(workflow_history) - 1 else ""
-                                result_html += f"<span style='color: #10b981;'>{step}</span>{arrow}"
-                            result_html += "</div></div>"
-
-                        # UC별 색상 카드
-                        if uc1_result:
-                            quality_score = uc1_result.get("quality_score", 0)
-                            passed = uc1_result.get("quality_passed", False)
-                            status_emoji = "✅" if passed else "❌"
-                            card_color = "#4caf50" if passed else "#f44336"
-                            result_html += f"""
-                            <div style='background: linear-gradient(135deg, {card_color}22, {card_color}11);
-                                        border-left: 4px solid {card_color}; padding: 15px;
-                                        border-radius: 8px; margin-bottom: 15px;'>
-                                <h4 style='margin: 0 0 10px 0; color: {card_color};'>🟢 UC1: 품질 검증 {status_emoji}</h4>
-                                <p style='margin: 5px 0;'><strong>품질 점수:</strong> {quality_score}/100</p>
-                                <p style='margin: 5px 0; font-size: 0.9em; opacity: 0.8;'>
-                                    규칙 기반 5W1H 검증 (~100ms, LLM 미사용)
-                                </p>
-                            </div>
-                            """
-
-                        if uc2_result:
-                            consensus_score = uc2_result.get("consensus_score", 0)
-                            consensus_reached = uc2_result.get("consensus_reached", False)
-                            status_emoji = "✅" if consensus_reached else "❌"
-                            card_color = "#ff9800" if consensus_reached else "#f44336"
-                            result_html += f"""
-                            <div style='background: linear-gradient(135deg, {card_color}22, {card_color}11);
-                                        border-left: 4px solid {card_color}; padding: 15px;
-                                        border-radius: 8px; margin-bottom: 15px;'>
-                                <h4 style='margin: 0 0 10px 0; color: {card_color};'>🟠 UC2: 자동 복구 {status_emoji}</h4>
-                                <p style='margin: 5px 0;'><strong>Consensus Score:</strong> {consensus_score:.2f}</p>
-                                <p style='margin: 5px 0; font-size: 0.9em; opacity: 0.8;'>
-                                    GPT-4o-mini + Gemini-2.5-Pro 2-Agent Consensus
-                                </p>
-                            </div>
-                            """
-
-                        if uc3_result:
-                            consensus_score = uc3_result.get("consensus_score", 0)
-                            consensus_reached = uc3_result.get("consensus_reached", False)
-                            status_emoji = "✅" if consensus_reached else "❌"
-                            card_color = "#2196f3" if consensus_reached else "#f44336"
-                            result_html += f"""
-                            <div style='background: linear-gradient(135deg, {card_color}22, {card_color}11);
-                                        border-left: 4px solid {card_color}; padding: 15px;
-                                        border-radius: 8px; margin-bottom: 15px;'>
-                                <h4 style='margin: 0 0 10px 0; color: {card_color};'>🔵 UC3: 신규 사이트 발견 {status_emoji}</h4>
-                                <p style='margin: 5px 0;'><strong>Consensus Score:</strong> {consensus_score:.2f}</p>
-                                <p style='margin: 5px 0; font-size: 0.9em; opacity: 0.8;'>
-                                    GPT-4o HTML DOM 분석 기반 Discovery
-                                </p>
-                            </div>
-                            """
-
-                        # 최종 결과
-                        if final_result:
-                            title = final_result.get("title", "N/A")[:100]
-                            body = final_result.get("body", "")
-                            body_preview = body[:200] + "..." if len(body) > 200 else body
-                            result_html += f"""
-                            <div style='background: rgba(16, 185, 129, 0.1); padding: 15px;
-                                        border-radius: 8px; border: 1px solid rgba(16, 185, 129, 0.3);'>
-                                <h4 style='margin: 0 0 10px 0; color: #10b981;'>📰 추출된 콘텐츠</h4>
-                                <p style='margin: 5px 0;'><strong>제목:</strong> {title}</p>
-                                <p style='margin: 5px 0;'><strong>본문 미리보기:</strong> {body_preview}</p>
-                                <p style='margin: 5px 0;'><strong>본문 길이:</strong> {len(body)} 글자</p>
-                            </div>
-                            """
-
-                        # 실패 인사이트 (에러가 있는 경우)
-                        error_message = final_state.get("error_message")
-                        if error_message:
-                            failure_count = final_state.get("failure_count", 0)
-                            result_html += f"""
-                            <div style='background: linear-gradient(135deg, #f4433622, #f4433611);
-                                        border-left: 4px solid #f44336; padding: 15px;
-                                        border-radius: 8px; margin-bottom: 15px;'>
-                                <h4 style='margin: 0 0 10px 0; color: #f44336;'>❌ 실패 원인 분석</h4>
-                                <p style='margin: 5px 0;'><strong>에러:</strong> {error_message}</p>
-                                <p style='margin: 5px 0;'><strong>재시도 횟수:</strong> {failure_count}/3</p>
-                                <p style='margin: 5px 0; font-size: 0.9em; opacity: 0.8;'>
-                                    💡 <strong>해결 방법:</strong>
-                                    {'사이트 구조가 변경되었거나 새로운 사이트입니다. UC2/UC3가 자동으로 처리를 시도했으나 실패했습니다.' if 'consensus' in error_message or 'discovery' in error_message else ''}
-                                    {'무한 루프가 감지되어 안전하게 종료했습니다. 사이트 호환성을 확인하세요.' if 'Loop' in error_message else ''}
-                                </p>
-                                <details style='margin-top: 10px;'>
-                                    <summary style='cursor: pointer; color: #f44336; font-weight: bold;'>📋 상세 실행 기록 보기</summary>
-                                    <div style='background: rgba(0,0,0,0.2); padding: 10px; margin-top: 10px;
-                                                border-radius: 4px; font-family: monospace; font-size: 0.85em;'>
-                                        {'<br>'.join(workflow_history)}
-                                    </div>
-                                </details>
-                            </div>
-                            """
-
-                        # LangSmith 링크
-                        result_html += """
-                        <div style='margin-top: 15px; padding: 10px; background: rgba(59, 130, 246, 0.1);
-                                    border-radius: 6px; text-align: center;'>
-                            <a href='https://smith.langchain.com/' target='_blank'
-                               style='color: #3b82f6; text-decoration: none; font-weight: bold;'>
-                                🔗 LangSmith에서 AI 판단 과정 추적하기 →
-                            </a>
-                        </div>
-                        """
-                        result_html += "</div>"
-
-                        log_lines.append("[INFO] ✅ 테스트 완료!")
-
-                        return (result_html, "\n".join(log_lines))
-
-                    except Exception as e:
-                        import traceback
-                        error_trace = traceback.format_exc()
-                        log_lines.append(f"[ERROR] {str(e)}")
-                        log_lines.append(f"[TRACE] {error_trace}")
-
-                        return (
-                            f"""<div class='status-box status-error'>
-                            <h3>❌ 오류 발생</h3>
-                            <p>{str(e)}</p>
-                            </div>""",
-                            "\n".join(log_lines)
-                        )
-
-                # 빠른 UC 테스트 버튼 이벤트
+                # Event handlers for Master Graph Demo
                 quick_test_btn.click(
                     fn=run_quick_uc_test,
-                    inputs=[quick_test_url],
+                    inputs=quick_test_url,
                     outputs=[quick_test_output, quick_test_log]
                 )
 
                 quick_clear_btn.click(
                     fn=lambda: ("", "", ""),
-                    inputs=[],
                     outputs=[quick_test_url, quick_test_output, quick_test_log]
                 )
-
-                # 테스트 크롤링 버튼
-                single_crawl_btn.click(
-                    fn=run_single_crawl,
-                    inputs=[single_url, single_category],
-                    outputs=[single_output, single_log]
-                )
-
-                gr.Markdown("---")
-
-                # 자동 스케줄러 안내
-                gr.Markdown("### 2️⃣ 자동 일간 수집")
-                gr.Markdown("""
-                **일간 뉴스 자동 수집은 "⏰ 자동 스케줄" 탭에서 설정하세요!**
-
-                - 매일 자동으로 뉴스 수집
-                - 시간과 카테고리 설정 가능
-                - 수집 기록 조회 가능
-
-                👉 **[⏰ 자동 스케줄]** 탭으로 이동하세요
-                """)
 
             # ============================================
             # Tab 2: 🧠 AI 아키텍처 설명
@@ -1151,8 +1066,11 @@ def create_app():
                     interactive=False
                 )
 
-                # CSV 다운로드
-                download_btn = gr.Button("📥 CSV 다운로드", size="lg")
+                # CSV/JSON 다운로드
+                with gr.Row():
+                    download_csv_btn = gr.Button("📥 CSV 다운로드", size="lg", scale=1)
+                    download_json_btn = gr.Button("📥 JSON 다운로드", size="lg", scale=1)
+
                 download_file = gr.File(label="다운로드")
 
                 # 자연어 검색 핸들러
@@ -1221,9 +1139,15 @@ def create_app():
                     outputs=results_df
                 )
 
-                # CSV 다운로드
-                download_btn.click(
+                # CSV/JSON 다운로드
+                download_csv_btn.click(
                     fn=download_csv,
+                    inputs=results_df,
+                    outputs=download_file
+                )
+
+                download_json_btn.click(
+                    fn=download_json,
                     inputs=results_df,
                     outputs=download_file
                 )
