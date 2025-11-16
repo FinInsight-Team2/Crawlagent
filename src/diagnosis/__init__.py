@@ -14,9 +14,4 @@ from src.diagnosis.error_classifier import ErrorClassifier, FailureCategory
 from src.diagnosis.failure_analyzer import FailureAnalyzer
 from src.diagnosis.recommendation_engine import RecommendationEngine
 
-__all__ = [
-    'ErrorClassifier',
-    'FailureCategory',
-    'FailureAnalyzer',
-    'RecommendationEngine'
-]
+__all__ = ["ErrorClassifier", "FailureCategory", "FailureAnalyzer", "RecommendationEngine"]

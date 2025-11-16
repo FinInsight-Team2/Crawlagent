@@ -27,13 +27,14 @@ Workflow:
 수정일: 2025-11-10 (LLM 역할 명확화 + Claude 제거)
 """
 
-from typing import TypedDict, Optional, List, Literal
-from langgraph.graph import StateGraph, START, END
+from typing import List, Literal, Optional, TypedDict
 
+from langgraph.graph import END, START, StateGraph
 
 # ============================================================
 # Step 1: State 정의 (데이터 저장소)
 # ============================================================
+
 
 class ValidationState(TypedDict, total=False):
     """
@@ -75,6 +76,7 @@ class ValidationState(TypedDict, total=False):
             "uc2_success": False
         }
     """
+
     # 입력 데이터 (크롤링 결과)
     url: str
     site_name: str
@@ -101,6 +103,7 @@ class ValidationState(TypedDict, total=False):
 # ============================================================
 # Step 2: Node 함수 정의 (작업 단위)
 # ============================================================
+
 
 def extract_fields(state: ValidationState) -> dict:
     """
@@ -184,13 +187,10 @@ def calculate_quality(state: ValidationState) -> dict:
         missing.append("date")
 
     # URL: 10점 (유지)
-    if url and url.startswith('http'):
+    if url and url.startswith("http"):
         score += 10
 
-    return {
-        "quality_score": score,
-        "missing_fields": missing
-    }
+    return {"quality_score": score, "missing_fields": missing}
 
 
 def decide_action(state: ValidationState) -> dict:
@@ -227,9 +227,10 @@ def decide_action(state: ValidationState) -> dict:
         - uc1_validation_result 추가 (Master State 호환)
         - UC2/UC3 직접 호출 제거 (Supervisor가 라우팅)
     """
+    from loguru import logger
+
     from src.storage.database import get_db
     from src.storage.models import Selector
-    from loguru import logger
 
     quality_score = state["quality_score"]
     missing_fields = state.get("missing_fields", [])
@@ -243,13 +244,13 @@ def decide_action(state: ValidationState) -> dict:
             "quality_passed": True,
             "quality_score": quality_score,
             "missing_fields": missing_fields,
-            "next_action": "save"
+            "next_action": "save",
         }
 
         return {
             "next_action": "save",
             "quality_passed": True,
-            "uc1_validation_result": validation_result
+            "uc1_validation_result": validation_result,
         }
 
     # 2. 품질 실패 → Selector 존재 여부 확인
@@ -260,35 +261,39 @@ def decide_action(state: ValidationState) -> dict:
 
             if selector:
                 # Selector 존재 → DOM 변경 (UC2 Recovery)
-                logger.info(f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector exists → Supervisor will route to UC2")
+                logger.info(
+                    f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector exists → Supervisor will route to UC2"
+                )
 
                 validation_result = {
                     "quality_passed": False,
                     "quality_score": quality_score,
                     "missing_fields": missing_fields,
-                    "next_action": "heal"
+                    "next_action": "heal",
                 }
 
                 return {
                     "next_action": "heal",
                     "quality_passed": False,
-                    "uc1_validation_result": validation_result
+                    "uc1_validation_result": validation_result,
                 }
             else:
                 # Selector 없음 → 신규 사이트 (UC3 Discovery)
-                logger.info(f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector missing → Supervisor will route to UC3")
+                logger.info(
+                    f"[UC1] ❌ Quality failed (score={quality_score} < 80), Selector missing → Supervisor will route to UC3"
+                )
 
                 validation_result = {
                     "quality_passed": False,
                     "quality_score": quality_score,
                     "missing_fields": missing_fields,
-                    "next_action": "uc3"
+                    "next_action": "uc3",
                 }
 
                 return {
                     "next_action": "uc3",
                     "quality_passed": False,
-                    "uc1_validation_result": validation_result
+                    "uc1_validation_result": validation_result,
                 }
         finally:
             db.close()
@@ -301,20 +306,20 @@ def decide_action(state: ValidationState) -> dict:
             "quality_passed": False,
             "quality_score": quality_score,
             "missing_fields": missing_fields,
-            "next_action": "uc3"
+            "next_action": "uc3",
         }
 
         return {
             "next_action": "uc3",
             "quality_passed": False,
-            "uc1_validation_result": validation_result
+            "uc1_validation_result": validation_result,
         }
-
 
 
 # ============================================================
 # Step 4: Graph 구성 (State + Nodes + Edges 조합)
 # ============================================================
+
 
 def create_uc1_validation_agent():
     """
@@ -391,9 +396,9 @@ if __name__ == "__main__":
         poetry run python src/workflow/uc1_validation.py
     """
 
-    print("="*60)
+    print("=" * 60)
     print("UC1 Validation Agent 테스트")
-    print("="*60)
+    print("=" * 60)
 
     # Graph 생성
     graph = create_uc1_validation_agent()
@@ -404,11 +409,12 @@ if __name__ == "__main__":
         "url": "https://www.yna.co.kr/view/AKR20251102043351001",
         "site_name": "yonhap",
         "title": "한중정상회담 첫 대좌…관계회복 논의",
-        "body": "이재명 대통령과 시진핑 중국 국가주席이 1일 오후 경주 힐튼호텔에서 첫 대면 정상회담을 가졌다..." * 20,  # 긴 본문
+        "body": "이재명 대통령과 시진핑 중국 국가주席이 1일 오후 경주 힐튼호텔에서 첫 대면 정상회담을 가졌다..."
+        * 20,  # 긴 본문
         "date": "2025-11-02 14:30:00",
         "quality_score": 0,  # 초기값
         "missing_fields": [],  # 초기값
-        "next_action": "save"  # 초기값 (덮어써짐)
+        "next_action": "save",  # 초기값 (덮어써짐)
     }
 
     result1 = graph.invoke(inputs1)
@@ -428,7 +434,7 @@ if __name__ == "__main__":
         "date": "2025-11-02",
         "quality_score": 0,
         "missing_fields": [],
-        "next_action": "save"
+        "next_action": "save",
     }
 
     result2 = graph.invoke(inputs2)
@@ -449,7 +455,7 @@ if __name__ == "__main__":
         "date": "2025-11-02",
         "quality_score": 0,
         "missing_fields": [],
-        "next_action": "save"
+        "next_action": "save",
     }
 
     result3 = graph.invoke(inputs3)
@@ -460,9 +466,9 @@ if __name__ == "__main__":
     print(f"  → 예상: quality_score=40 (Title 20 + Body 0 + Date 10 + URL 10)")
     print(f"  → 예상: next_action='heal' (yonhap Selector 존재)")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("테스트 완료!")
-    print("="*60)
+    print("=" * 60)
 
     # Human-in-the-Loop 예시 (주석 처리)
     """

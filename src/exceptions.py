@@ -6,12 +6,12 @@ Created: 2025-11-11
 Purpose: Replace generic Exception catches with specific error types
 """
 
-from typing import Optional, Dict, Any
-
+from typing import Any, Dict, Optional
 
 # ============================================================================
 # Base Exceptions
 # ============================================================================
+
 
 class CrawlAgentError(Exception):
     """Base exception for all CrawlAgent errors"""
@@ -31,8 +31,10 @@ class CrawlAgentError(Exception):
 # LLM API Errors
 # ============================================================================
 
+
 class LLMAPIError(CrawlAgentError):
     """Base exception for LLM API errors (OpenAI, Gemini, Claude)"""
+
     pass
 
 
@@ -44,7 +46,7 @@ class OpenAIAPIError(LLMAPIError):
         message: str,
         status_code: Optional[int] = None,
         error_code: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.status_code = status_code
         self.error_code = error_code
@@ -77,7 +79,7 @@ class OpenAIAPIError(LLMAPIError):
             message=f"OpenAI API Error: {error_str}",
             status_code=status_code,
             error_code=error_code,
-            details={"original_error": error_str}
+            details={"original_error": error_str},
         )
 
 
@@ -89,7 +91,7 @@ class GeminiAPIError(LLMAPIError):
         message: str,
         status_code: Optional[int] = None,
         reason: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.status_code = status_code
         self.reason = reason
@@ -118,7 +120,7 @@ class GeminiAPIError(LLMAPIError):
             message=f"Gemini API Error: {error_str}",
             status_code=status_code,
             reason=reason,
-            details={"original_error": error_str}
+            details={"original_error": error_str},
         )
 
 
@@ -130,7 +132,7 @@ class ClaudeAPIError(LLMAPIError):
         message: str,
         status_code: Optional[int] = None,
         error_type: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.status_code = status_code
         self.error_type = error_type
@@ -141,15 +143,19 @@ class ClaudeAPIError(LLMAPIError):
 # Database Errors
 # ============================================================================
 
+
 class DatabaseError(CrawlAgentError):
     """Base exception for database errors"""
+
     pass
 
 
 class DatabaseConnectionError(DatabaseError):
     """Database connection failures"""
 
-    def __init__(self, message: str, retry_count: int = 0, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, message: str, retry_count: int = 0, details: Optional[Dict[str, Any]] = None
+    ):
         self.retry_count = retry_count
         super().__init__(message, details)
 
@@ -157,7 +163,9 @@ class DatabaseConnectionError(DatabaseError):
 class DatabaseQueryError(DatabaseError):
     """Database query execution failures"""
 
-    def __init__(self, message: str, query: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, message: str, query: Optional[str] = None, details: Optional[Dict[str, Any]] = None
+    ):
         self.query = query
         super().__init__(message, details)
 
@@ -165,7 +173,12 @@ class DatabaseQueryError(DatabaseError):
 class DatabaseIntegrityError(DatabaseError):
     """Database constraint violations (unique, foreign key, etc.)"""
 
-    def __init__(self, message: str, constraint: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        constraint: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
         self.constraint = constraint
         super().__init__(message, details)
 
@@ -174,8 +187,10 @@ class DatabaseIntegrityError(DatabaseError):
 # Workflow Errors
 # ============================================================================
 
+
 class WorkflowError(CrawlAgentError):
     """Base exception for LangGraph workflow errors"""
+
     pass
 
 
@@ -187,7 +202,7 @@ class UC1ValidationError(WorkflowError):
         message: str,
         url: Optional[str] = None,
         quality_score: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.url = url
         self.quality_score = quality_score
@@ -203,7 +218,7 @@ class UC2ConsensusError(WorkflowError):
         url: Optional[str] = None,
         consensus_score: Optional[float] = None,
         retry_count: int = 0,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.url = url
         self.consensus_score = consensus_score
@@ -219,7 +234,7 @@ class UC3DiscoveryError(WorkflowError):
         message: str,
         url: Optional[str] = None,
         confidence: Optional[float] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.url = url
         self.confidence = confidence
@@ -234,7 +249,7 @@ class LoopDetectionError(WorkflowError):
         message: str,
         failure_count: int,
         workflow_history: Optional[list] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.failure_count = failure_count
         self.workflow_history = workflow_history or []
@@ -245,8 +260,10 @@ class LoopDetectionError(WorkflowError):
 # Scraping Errors
 # ============================================================================
 
+
 class ScrapingError(CrawlAgentError):
     """Base exception for web scraping errors"""
+
     pass
 
 
@@ -258,7 +275,7 @@ class HTMLFetchError(ScrapingError):
         message: str,
         url: Optional[str] = None,
         status_code: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.url = url
         self.status_code = status_code
@@ -273,7 +290,7 @@ class SelectorNotFoundError(ScrapingError):
         message: str,
         selector: Optional[str] = None,
         url: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.selector = selector
         self.url = url
@@ -288,7 +305,7 @@ class ExtractionError(ScrapingError):
         message: str,
         field: Optional[str] = None,
         url: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.field = field
         self.url = url
@@ -299,8 +316,10 @@ class ExtractionError(ScrapingError):
 # Configuration Errors
 # ============================================================================
 
+
 class ConfigurationError(CrawlAgentError):
     """Base exception for configuration errors"""
+
     pass
 
 
@@ -316,7 +335,9 @@ class MissingAPIKeyError(ConfigurationError):
 class InvalidConfigError(ConfigurationError):
     """Invalid configuration value"""
 
-    def __init__(self, config_key: str, value: Any, reason: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, config_key: str, value: Any, reason: str, details: Optional[Dict[str, Any]] = None
+    ):
         self.config_key = config_key
         self.value = value
         self.reason = reason
@@ -327,6 +348,7 @@ class InvalidConfigError(ConfigurationError):
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
 
 def is_retryable_error(error: Exception) -> bool:
     """

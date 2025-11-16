@@ -8,16 +8,17 @@ Usage:
     PYTHONPATH=/Users/charlee/Desktop/Intern/crawlagent poetry run python scripts/visualize_master_graph.py
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.workflow.master_crawl_workflow import build_master_graph
 from loguru import logger
+
+from src.workflow.master_crawl_workflow import build_master_graph
 
 
 def visualize_graph():
@@ -52,7 +53,9 @@ def visualize_graph():
     except Exception as e:
         logger.error(f"PNG 생성 실패 (Mermaid CLI 미설치 가능성): {e}")
         logger.info("Mermaid CLI 설치: npm install -g @mermaid-js/mermaid-cli")
-        print("\n💡 대신 위의 Mermaid 텍스트를 https://mermaid.live 에 붙여넣으면 시각화를 볼 수 있습니다!\n")
+        print(
+            "\n💡 대신 위의 Mermaid 텍스트를 https://mermaid.live 에 붙여넣으면 시각화를 볼 수 있습니다!\n"
+        )
 
     # 그래프 노드와 엣지 정보 출력
     print("=" * 80)

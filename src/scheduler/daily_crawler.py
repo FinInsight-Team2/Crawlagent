@@ -109,7 +109,9 @@ def run_daily_crawl():
     # 최종 결과 요약
     logger.info("\n" + "=" * 80)
     logger.info(f"[일일 크롤링 완료] 날짜: {target_date_str}")
-    logger.info(f"[결과] 성공: {success_count}/{len(categories)}, 실패: {failure_count}/{len(categories)}")
+    logger.info(
+        f"[결과] 성공: {success_count}/{len(categories)}, 실패: {failure_count}/{len(categories)}"
+    )
 
     if failed_categories:
         logger.warning(f"[실패 카테고리] {', '.join(failed_categories)}")

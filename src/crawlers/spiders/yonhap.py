@@ -10,11 +10,13 @@ Updated: 2025-11-06
 - Stage 2: Extract article content from detail pages
 """
 
+from datetime import datetime
+
 import scrapy
 import trafilatura
-from datetime import datetime
+
 from src.storage.database import get_db
-from src.storage.models import Selector, CrawlResult
+from src.storage.models import CrawlResult, Selector
 
 
 class YonhapSpider(scrapy.Spider):
@@ -40,13 +42,13 @@ class YonhapSpider(scrapy.Spider):
 
     # Category mapping
     CATEGORIES = {
-        'politics': '정치',
-        'economy': '경제',
-        'nk': '북한',
-        'international': '국제',
-        'society': '사회',
-        'culture': '문화',
-        'sports': '스포츠'
+        "politics": "정치",
+        "economy": "경제",
+        "nk": "북한",
+        "international": "국제",
+        "society": "사회",
+        "culture": "문화",
+        "sports": "스포츠",
     }
 
     def trigger_uc2_workflow(self, url: str) -> None:
@@ -66,9 +68,10 @@ class YonhapSpider(scrapy.Spider):
 
         try:
             import requests
-            from src.workflow.uc2_hitl import build_uc2_graph
+
             from src.storage.database import get_db
-            from src.storage.models import Selector, DecisionLog
+            from src.storage.models import DecisionLog, Selector
+            from src.workflow.uc2_hitl import build_uc2_graph
 
             # 1. HTML 페이지 다시 가져오기
             response = requests.get(url, timeout=30)
@@ -78,16 +81,18 @@ class YonhapSpider(scrapy.Spider):
             self.logger.info(f"[UC2] LangGraph 워크플로우 실행 중... (URL: {url})")
 
             uc2_graph = build_uc2_graph()
-            uc2_result = uc2_graph.invoke({
-                "url": url,
-                "html_content": html_content,
-                "site_name": "yonhap",
-                "current_selectors": {
-                    "title": self.selector.title_selector,
-                    "body": self.selector.body_selector,
-                    "date": self.selector.date_selector
+            uc2_result = uc2_graph.invoke(
+                {
+                    "url": url,
+                    "html_content": html_content,
+                    "site_name": "yonhap",
+                    "current_selectors": {
+                        "title": self.selector.title_selector,
+                        "body": self.selector.body_selector,
+                        "date": self.selector.date_selector,
+                    },
                 }
-            })
+            )
 
             # 3. 합의 결과 처리
             consensus_reached = uc2_result.get("consensus_reached", False)
@@ -137,7 +142,7 @@ class YonhapSpider(scrapy.Spider):
                         consensus_reached=False,
                         retry_count=uc2_result.get("retry_count", 0),
                         proposed_selectors=uc2_result.get("proposed_selectors", {}),
-                        validation_results=uc2_result.get("validation_results", {})
+                        validation_results=uc2_result.get("validation_results", {}),
                     )
                     db.add(log)
                     db.commit()
@@ -155,6 +160,7 @@ class YonhapSpider(scrapy.Spider):
         except Exception as e:
             self.logger.error(f"[UC2 실패] {str(e)}")
             import traceback
+
             self.logger.error(traceback.format_exc())
 
     def __init__(self, category=None, start_urls=None, target_date=None, *args, **kwargs):
@@ -180,6 +186,7 @@ class YonhapSpider(scrapy.Spider):
         # 날짜 기반 증분 수집 (Incremental Crawling)
         if target_date:
             from datetime import datetime
+
             try:
                 self.target_date = datetime.strptime(target_date, "%Y-%m-%d").date()
                 self.logger.info(f"[INIT] 증분 수집 모드: target_date={self.target_date}")
@@ -201,17 +208,16 @@ class YonhapSpider(scrapy.Spider):
             # Category parameter handling
             if category:
                 if category not in self.CATEGORIES:
-                    raise ValueError(f"Invalid category '{category}'. Valid: {list(self.CATEGORIES.keys())}")
+                    raise ValueError(
+                        f"Invalid category '{category}'. Valid: {list(self.CATEGORIES.keys())}"
+                    )
                 self.categories = [category]
             else:
                 # Default: crawl all categories
                 self.categories = list(self.CATEGORIES.keys())
 
             # 카테고리 리스트 페이지 URL 생성 (페이지네이션 지원을 위해 /all 사용)
-            self.start_urls = [
-                f"https://www.yna.co.kr/{cat}/all"
-                for cat in self.categories
-            ]
+            self.start_urls = [f"https://www.yna.co.kr/{cat}/all" for cat in self.categories]
             self.logger.info(f"[INIT] Categories to crawl: {self.categories}")
 
         # PostgreSQL에서 Selector 로드 (with proper session handling)
@@ -246,14 +252,14 @@ class YonhapSpider(scrapy.Spider):
         import re
 
         patterns = {
-            r'/economy/': ('economy', 0.95),
-            r'/politics/': ('politics', 0.95),
-            r'/society/': ('society', 0.95),
-            r'/international/': ('international', 0.95),
-            r'/sports/': ('sports', 0.95),
-            r'/industry/': ('economy', 0.85),  # 산업 → 경제로 매핑 (약간 낮은 신뢰도)
-            r'/stock/': ('economy', 0.90),     # 주식 → 경제
-            r'/market/': ('economy', 0.90),    # 시장 → 경제
+            r"/economy/": ("economy", 0.95),
+            r"/politics/": ("politics", 0.95),
+            r"/society/": ("society", 0.95),
+            r"/international/": ("international", 0.95),
+            r"/sports/": ("sports", 0.95),
+            r"/industry/": ("economy", 0.85),  # 산업 → 경제로 매핑 (약간 낮은 신뢰도)
+            r"/stock/": ("economy", 0.90),  # 주식 → 경제
+            r"/market/": ("economy", 0.90),  # 시장 → 경제
         }
 
         for pattern, (cat, conf) in patterns.items():
@@ -276,14 +282,14 @@ class YonhapSpider(scrapy.Spider):
         Article URL pattern: /view/AKR{timestamp}
         """
         # Check if this is a single article URL
-        if '/view/AKR' in response.url:
+        if "/view/AKR" in response.url:
             self.logger.info(f"[DIRECT] Crawling single article: {response.url}")
             yield from self.parse_article(response, direct=True)
             return
 
         # Otherwise, treat as category/list page
         # Infer category from URL path
-        url_parts = response.url.split('/')
+        url_parts = response.url.split("/")
 
         # Try to find category from predefined list first
         category = None
@@ -299,15 +305,15 @@ class YonhapSpider(scrapy.Spider):
         if not category:
             # Get the path segment before 'index' or last meaningful part
             for part in reversed(url_parts):
-                if part and part not in ['index', '']:
+                if part and part not in ["index", ""]:
                     category = part
                     category_kr = part  # Use same value if not in predefined list
                     break
 
         # Fallback
         if not category:
-            category = 'unknown'
-            category_kr = '기타'
+            category = "unknown"
+            category_kr = "기타"
 
         self.logger.info(f"[STAGE 1] Parsing list page: {response.url} (category: {category_kr})")
 
@@ -321,16 +327,16 @@ class YonhapSpider(scrapy.Spider):
 
         for link in article_links:
             # Convert relative URL to absolute
-            if link.startswith('/view/'):
+            if link.startswith("/view/"):
                 article_url = f"https://www.yna.co.kr{link}"
-            elif link.startswith('http'):
-                article_url = link.split('?')[0]  # Remove query params like ?section=...
+            elif link.startswith("http"):
+                article_url = link.split("?")[0]  # Remove query params like ?section=...
             else:
                 continue
 
             # Extract just the article ID to deduplicate
-            if '/view/AKR' in article_url:
-                article_id = article_url.split('/view/')[1].split('?')[0]
+            if "/view/AKR" in article_url:
+                article_id = article_url.split("/view/")[1].split("?")[0]
 
                 if article_id in seen_urls:
                     continue
@@ -347,10 +353,7 @@ class YonhapSpider(scrapy.Spider):
                 yield scrapy.Request(
                     clean_url,
                     callback=self.parse_article,
-                    meta={
-                        'category': category,
-                        'category_kr': category_kr
-                    }
+                    meta={"category": category, "category_kr": category_kr},
                 )
 
         # 큐 통계 로깅
@@ -365,24 +368,21 @@ class YonhapSpider(scrapy.Spider):
         # 증분 수집 모드: 현재 페이지의 기사 날짜를 미리 체크하여 페이지네이션 조기 중단
         if self.target_date and article_links:
             from datetime import datetime
+
             old_article_count = 0
 
             # 리스트 페이지에 표시된 날짜 텍스트 파싱
             # 예: <span class="txt-time">11-07 10:30</span>
-            date_texts = response.css('span.txt-time::text').getall()
+            date_texts = response.css("span.txt-time::text").getall()
 
             for date_text in date_texts:
                 try:
                     # 형식: "11-07 10:30" (MM-DD HH:MM)
                     date_part = date_text.strip().split()[0]  # "11-07"
-                    month, day = date_part.split('-')
+                    month, day = date_part.split("-")
 
                     # 연도는 target_date에서 가져옴 (같은 해로 가정)
-                    article_date = datetime(
-                        self.target_date.year,
-                        int(month),
-                        int(day)
-                    ).date()
+                    article_date = datetime(self.target_date.year, int(month), int(day)).date()
 
                     if article_date < self.target_date:
                         old_article_count += 1
@@ -399,7 +399,7 @@ class YonhapSpider(scrapy.Spider):
 
         # 페이지네이션: 현재 페이지 다음 번호 링크 찾기
         # <strong class="num on">1</strong> 다음의 <a class="num">2</a> 를 찾음
-        current_page = response.css('div.paging-type01 strong.num.on::text').get()
+        current_page = response.css("div.paging-type01 strong.num.on::text").get()
 
         if current_page:
             try:
@@ -421,15 +421,17 @@ class YonhapSpider(scrapy.Spider):
                 next_num = current_num + 1
 
                 # 다음 페이지 번호 링크 찾기 (a.num 중에서)
-                next_page = response.css(f'div.paging-type01 a.num[href*="/{next_num}"]::attr(href)').get()
+                next_page = response.css(
+                    f'div.paging-type01 a.num[href*="/{next_num}"]::attr(href)'
+                ).get()
 
                 # 다음 번호가 없으면 "다음" 버튼(다음 블록) 확인
                 if not next_page:
-                    next_page = response.css('div.paging-type01 a.next::attr(href)').get()
+                    next_page = response.css("div.paging-type01 a.next::attr(href)").get()
 
                 if next_page:
                     # 상대 URL을 절대 URL로 변환
-                    if next_page.startswith('/'):
+                    if next_page.startswith("/"):
                         next_page_url = f"https://www.yna.co.kr{next_page}"
                     else:
                         next_page_url = next_page
@@ -441,15 +443,16 @@ class YonhapSpider(scrapy.Spider):
                     yield scrapy.Request(
                         next_page_url,
                         callback=self.parse,
-                        meta={
-                            'category': category,
-                            'category_kr': category_kr
-                        }
+                        meta={"category": category, "category_kr": category_kr},
                     )
                 else:
-                    self.logger.info(f"[PAGINATION] No more pages for {category_kr} (현재: {current_num}페이지)")
+                    self.logger.info(
+                        f"[PAGINATION] No more pages for {category_kr} (현재: {current_num}페이지)"
+                    )
             except ValueError:
-                self.logger.warning(f"[PAGINATION] Failed to parse current page number: {current_page}")
+                self.logger.warning(
+                    f"[PAGINATION] Failed to parse current page number: {current_page}"
+                )
         else:
             self.logger.info(f"[PAGINATION] No pagination found for {category_kr}")
 
@@ -462,11 +465,11 @@ class YonhapSpider(scrapy.Spider):
         """
         # Direct crawl mode: infer category from URL or default
         if direct:
-            category = response.meta.get('category', 'unknown')
-            category_kr = response.meta.get('category_kr', '기타')
+            category = response.meta.get("category", "unknown")
+            category_kr = response.meta.get("category_kr", "기타")
         else:
-            category = response.meta['category']
-            category_kr = response.meta['category_kr']
+            category = response.meta["category"]
+            category_kr = response.meta["category_kr"]
 
         # URL에서 카테고리 힌트 추출
         url_category, url_confidence = self.extract_category_from_url(response.url)
@@ -480,7 +483,7 @@ class YonhapSpider(scrapy.Spider):
 
         try:
             # Title: h1.tit01 (corrected selector from DOM analysis)
-            title = response.css('h1.tit01::text').get()
+            title = response.css("h1.tit01::text").get()
             if not title:
                 # Fallback: meta tag
                 title = response.css('meta[property="og:title"]::attr(content)').get()
@@ -492,8 +495,9 @@ class YonhapSpider(scrapy.Spider):
             article_date = None
             if date_str and self.target_date:
                 from datetime import datetime
+
                 try:
-                    article_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                    article_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
 
                     # 다음날 기사면 전체 크롤링 중단 (Self-Healing 트리거 포인트)
                     if article_date > self.target_date:
@@ -502,7 +506,10 @@ class YonhapSpider(scrapy.Spider):
                             f"→ 크롤링 완전 중단 (증분 수집 완료)"
                         )
                         from scrapy.exceptions import CloseSpider
-                        raise CloseSpider(f"날짜 기반 자동 중단: {article_date} > {self.target_date}")
+
+                        raise CloseSpider(
+                            f"날짜 기반 자동 중단: {article_date} > {self.target_date}"
+                        )
 
                     # 이전날 기사면 스킵 + 연속 스킵 카운터 증가
                     if article_date < self.target_date:
@@ -523,6 +530,7 @@ class YonhapSpider(scrapy.Spider):
                                 f"→ 이후 페이지도 오래된 것으로 추론, 크롤링 중단"
                             )
                             from scrapy.exceptions import CloseSpider
+
                             raise CloseSpider(
                                 f"연속 스킵 기반 조기 중단: {category} {self.consecutive_skips[category]}개"
                             )
@@ -533,7 +541,9 @@ class YonhapSpider(scrapy.Spider):
                     if category in self.consecutive_skips:
                         self.consecutive_skips[category] = 0
 
-                    self.logger.info(f"[증분 수집 수집] 기사 날짜 {article_date} == 목표 {self.target_date}")
+                    self.logger.info(
+                        f"[증분 수집 수집] 기사 날짜 {article_date} == 목표 {self.target_date}"
+                    )
 
                 except Exception as e:
                     self.logger.warning(f"[증분 수집] 날짜 파싱 실패: {date_str}, {e}")
@@ -541,8 +551,9 @@ class YonhapSpider(scrapy.Spider):
             elif date_str:
                 # target_date가 없으면 article_date만 추출 (기존 동작)
                 from datetime import datetime
+
                 try:
-                    article_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                    article_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
                 except Exception:
                     pass
 
@@ -553,18 +564,20 @@ class YonhapSpider(scrapy.Spider):
                 include_tables=False,
                 no_fallback=False,
                 favor_precision=True,  # Ad removal priority
-                favor_recall=False
+                favor_recall=False,
             )
 
             # Fallback: CSS Selector if Trafilatura fails
             if not body or len(body) < 100:
                 self.logger.warning(f"[STAGE 2] Trafilatura failed, using CSS selector backup")
-                body_elements = response.css('article.article-wrap01 *::text').getall()
-                body = ' '.join(body_elements).strip()
+                body_elements = response.css("article.article-wrap01 *::text").getall()
+                body = " ".join(body_elements).strip()
 
             # 기본 검증 (빠른 필터링 - LLM 호출 전)
             if not title or not body or len(body) < 100:
-                self.logger.warning(f"[SKIP] 기본 검증 실패 (너무 짧음): title={bool(title)}, body_len={len(body) if body else 0}")
+                self.logger.warning(
+                    f"[SKIP] 기본 검증 실패 (너무 짧음): title={bool(title)}, body_len={len(body) if body else 0}"
+                )
                 return
 
             # UC1: LLM Quality Gate (핵심!)
@@ -577,13 +590,13 @@ class YonhapSpider(scrapy.Spider):
                 date=date_str,
                 category=category,
                 category_kr=category_kr,
-                url=response.url
+                url=response.url,
             )
 
-            decision = validation['decision']
-            confidence = validation['confidence']
+            decision = validation["decision"]
+            confidence = validation["confidence"]
 
-            if decision == 'reject' or decision == 'uncertain':
+            if decision == "reject" or decision == "uncertain":
                 # UC1 실패: 연속 실패 카운트 증가
                 self.failure_count += 1
 
@@ -634,9 +647,9 @@ class YonhapSpider(scrapy.Spider):
                     content_type="news",
                     validation_status="verified",  # UC1 검증 완료
                     validation_method="llm",
-                    llm_reasoning=validation['reasoning'],
+                    llm_reasoning=validation["reasoning"],
                     # Phase 1.2: URL 카테고리 힌트 (NEW!)
-                    url_category_confidence=url_confidence
+                    url_category_confidence=url_confidence,
                 )
                 db.add(crawl_result)
                 db.commit()
@@ -657,12 +670,13 @@ class YonhapSpider(scrapy.Spider):
                 "body_length": len(body),
                 "date": date_str,
                 "quality_score": confidence,
-                "status": "saved_to_db"
+                "status": "saved_to_db",
             }
 
         except Exception as e:
             self.logger.error(f"[ERROR] Failed to parse {response.url}: {e}")
             import traceback
+
             self.logger.error(traceback.format_exc())
 
     def calculate_quality_score(self, title, body, date, url):
@@ -697,7 +711,7 @@ class YonhapSpider(scrapy.Spider):
             score += 10
 
         # URL: 10 pts (유지)
-        if url and url.startswith('http'):
+        if url and url.startswith("http"):
             score += 10
 
         return score

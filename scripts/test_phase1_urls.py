@@ -7,19 +7,20 @@ Gradio UI 없이 직접 Master Workflow를 호출하여 테스트합니다.
 작성일: 2025-11-13
 """
 
-import sys
 import os
-from pathlib import Path
-from datetime import datetime
+import sys
 import time
+from datetime import datetime
+from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.workflow.master_crawl_workflow import build_master_graph, MasterCrawlState
-from src.utils.site_detector import extract_site_id
 from loguru import logger
+
+from src.utils.site_detector import extract_site_id
+from src.workflow.master_crawl_workflow import MasterCrawlState, build_master_graph
 
 # 10개 테스트 URL
 TEST_URLS = [
@@ -27,7 +28,11 @@ TEST_URLS = [
     ("https://news.jtbc.co.kr/article/NB12270830", "jtbc", "JTBC"),
     ("https://news.kbs.co.kr/news/pc/view/view.do?ncd=8407074", "kbs", "KBS"),
     ("https://news.sbs.co.kr/news/endPage.do?news_id=N1008329074", "sbs", "SBS"),
-    ("https://www.chosun.com/economy/money/2025/11/13/52MHLOUGURGTFOF5Y3TXN3WVIA/", "chosun", "조선일보"),
+    (
+        "https://www.chosun.com/economy/money/2025/11/13/52MHLOUGURGTFOF5Y3TXN3WVIA/",
+        "chosun",
+        "조선일보",
+    ),
     ("https://www.hankyung.com/article/2025111326861", "hankyung", "한국경제"),
     ("https://www.bbc.com/news/articles/c891nvwvg2zo", "bbc", "BBC"),
     ("https://yonhapnewstv.co.kr/news/AKR202511131509545Wu", "yonhapnewstv", "연합뉴스TV"),
@@ -52,7 +57,9 @@ def test_single_url(master_app, url: str, expected_site_id: str, site_name_kr: s
     extracted_site_id = extract_site_id(url)
     site_id_match = extracted_site_id == expected_site_id
 
-    print(f"✓ Site ID 추출: {extracted_site_id} {'✅' if site_id_match else f'❌ (예상: {expected_site_id})'}")
+    print(
+        f"✓ Site ID 추출: {extracted_site_id} {'✅' if site_id_match else f'❌ (예상: {expected_site_id})'}"
+    )
 
     # Workflow 실행
     start_time = time.time()
@@ -84,8 +91,12 @@ def test_single_url(master_app, url: str, expected_site_id: str, site_name_kr: s
         elapsed_time = time.time() - start_time
 
         # 결과 분석
-        success = final_state.get("next_action") == "end" and final_state.get("final_result") is not None
-        uc_path = " → ".join([h.split("(")[0].strip() for h in final_state.get("workflow_history", [])])
+        success = (
+            final_state.get("next_action") == "end" and final_state.get("final_result") is not None
+        )
+        uc_path = " → ".join(
+            [h.split("(")[0].strip() for h in final_state.get("workflow_history", [])]
+        )
 
         # Get scores from UC results
         uc1_result = final_state.get("uc1_validation_result", {})
@@ -168,10 +179,10 @@ def test_single_url(master_app, url: str, expected_site_id: str, site_name_kr: s
 
 def main():
     """메인 테스트 실행"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Phase 1: 10개 실제 URL 자동 테스트")
     print(f"시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*80)
+    print("=" * 80)
 
     # Master Graph 빌드
     print("\n📊 Master Workflow Graph 빌드 중...")
@@ -186,9 +197,9 @@ def main():
         time.sleep(1)  # API rate limit 방지
 
     # 결과 요약
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("📊 테스트 결과 요약")
-    print("="*80)
+    print("=" * 80)
 
     success_count = sum(1 for r in results if r["success"])
     site_id_match_count = sum(1 for r in results if r["site_id_match"])
@@ -204,7 +215,9 @@ def main():
     print(f"성공: {success_count}개 ({success_count/len(results)*100:.1f}%)")
     print(f"실패: {len(results) - success_count}개")
     print(f"\nSite ID 정규화:")
-    print(f"  정확: {site_id_match_count}/{len(results)} ({site_id_match_count/len(results)*100:.1f}%)")
+    print(
+        f"  정확: {site_id_match_count}/{len(results)} ({site_id_match_count/len(results)*100:.1f}%)"
+    )
     print(f"\nUC 분포:")
     print(f"  UC1 (DB Hit): {uc1_count}개")
     print(f"  UC2 (Self-Healing): {uc2_count}개")
@@ -219,19 +232,21 @@ def main():
     print("📋 상세 결과 표")
     print(f"{'='*80}\n")
     print(f"{'#':<3} {'Site':<15} {'UC':<5} {'결과':<4} {'시간':<8} {'점수':<6} {'Site ID':<8}")
-    print("-"*80)
+    print("-" * 80)
 
     for i, r in enumerate(results, 1):
         status = "✅" if r["success"] else "❌"
         time_str = f"{r['elapsed_time']:.2f}s"
-        score_str = f"{r['score']:.2f}" if r['score'] is not None else "N/A"
-        site_id_status = "✅" if r['site_id_match'] else "❌"
+        score_str = f"{r['score']:.2f}" if r["score"] is not None else "N/A"
+        site_id_status = "✅" if r["site_id_match"] else "❌"
 
-        print(f"{i:<3} {r['site_name_kr']:<15} {r['uc']:<5} {status:<4} {time_str:<8} {score_str:<6} {site_id_status:<8}")
+        print(
+            f"{i:<3} {r['site_name_kr']:<15} {r['uc']:<5} {status:<4} {time_str:<8} {score_str:<6} {site_id_status:<8}"
+        )
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print(f"완료 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*80)
+    print("=" * 80)
 
     # 실패 케이스 상세
     failed_cases = [r for r in results if not r["success"]]
@@ -244,7 +259,7 @@ def main():
             print(f"Site: {r['site_name_kr']} ({r['site_id']})")
             print(f"URL: {r['url']}")
             print(f"Error: {r['error']}")
-            print("-"*80)
+            print("-" * 80)
 
     return results
 

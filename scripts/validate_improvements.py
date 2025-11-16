@@ -13,6 +13,7 @@ Created: 2025-11-12
 
 import os
 import sys
+
 import requests
 from dotenv import load_dotenv
 from loguru import logger
@@ -21,12 +22,12 @@ from loguru import logger
 load_dotenv(override=True)
 
 # 프로젝트 root 추가
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.workflow.uc2_hitl import build_uc2_graph, HITLState
-from src.workflow.uc3_new_site import build_uc3_graph, UC3State
 from src.storage.database import get_db
 from src.storage.models import Selector
+from src.workflow.uc2_hitl import HITLState, build_uc2_graph
+from src.workflow.uc3_new_site import UC3State, build_uc3_graph
 
 
 def test_uc2_bbc():
@@ -35,9 +36,9 @@ def test_uc2_bbc():
 
     예상: Few-Shot Examples로 성능 향상
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST 1: UC2 - BBC News (Self-Healing)")
-    print("="*80)
+    print("=" * 80)
 
     url = "https://www.bbc.com/news/articles/c0mzdy84dy7o"
 
@@ -63,7 +64,7 @@ def test_uc2_bbc():
         "retry_count": 0,
         "final_selectors": None,
         "error_message": None,
-        "next_action": None
+        "next_action": None,
     }
 
     # 실행
@@ -102,9 +103,9 @@ def test_uc3_cnn():
 
     예상: Few-Shot + raw_html로 성능 향상
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST 2: UC3 - CNN (New Site Discovery - English)")
-    print("="*80)
+    print("=" * 80)
 
     url = "https://www.cnn.com/2024/11/08/tech/openai-chatgpt-search/index.html"
 
@@ -140,7 +141,7 @@ def test_uc3_cnn():
         "consensus_reached": False,
         "consensus_score": None,
         "final_selectors": None,
-        "error_message": None
+        "error_message": None,
     }
 
     # 실행
@@ -178,9 +179,9 @@ def test_uc3_chosun():
 
     예상: Few-Shot + raw_html로 한국 사이트도 인식
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TEST 3: UC3 - 조선일보 (New Site Discovery - Korean)")
-    print("="*80)
+    print("=" * 80)
 
     url = "https://www.chosun.com/politics/politics_general/2024/11/08/OGRTUUMV5FGZTDUZKPPVCKWQWI/"
 
@@ -216,7 +217,7 @@ def test_uc3_chosun():
         "consensus_reached": False,
         "consensus_score": None,
         "final_selectors": None,
-        "error_message": None
+        "error_message": None,
     }
 
     # 실행
@@ -249,39 +250,41 @@ def test_uc3_chosun():
 
 
 if __name__ == "__main__":
-    print("\n" + "🚀"*40)
+    print("\n" + "🚀" * 40)
     print("Few-Shot Examples 성능 개선 검증 시작")
-    print("🚀"*40)
+    print("🚀" * 40)
 
     results = {}
 
     # Test 1: UC2 - BBC
     try:
-        results['uc2_bbc'] = test_uc2_bbc()
+        results["uc2_bbc"] = test_uc2_bbc()
     except Exception as e:
         print(f"\n❌ UC2 BBC Test FAILED with exception: {e}")
-        results['uc2_bbc'] = False
+        results["uc2_bbc"] = False
 
     # Test 2: UC3 - CNN
     try:
-        results['uc3_cnn'] = test_uc3_cnn()
+        results["uc3_cnn"] = test_uc3_cnn()
     except Exception as e:
         print(f"\n❌ UC3 CNN Test FAILED with exception: {e}")
-        results['uc3_cnn'] = False
+        results["uc3_cnn"] = False
 
     # Test 3: UC3 - 조선일보
     try:
-        results['uc3_chosun'] = test_uc3_chosun()
+        results["uc3_chosun"] = test_uc3_chosun()
     except Exception as e:
         print(f"\n❌ UC3 Chosun Test FAILED with exception: {e}")
-        results['uc3_chosun'] = False
+        results["uc3_chosun"] = False
 
     # 최종 결과
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("📊 최종 검증 결과")
-    print("="*80)
+    print("=" * 80)
     print(f"UC2 - BBC (Self-Healing):          {'✅ PASS' if results['uc2_bbc'] else '❌ FAIL'}")
     print(f"UC3 - CNN (New Site - English):    {'✅ PASS' if results['uc3_cnn'] else '❌ FAIL'}")
-    print(f"UC3 - 조선일보 (New Site - Korean):  {'✅ PASS' if results['uc3_chosun'] else '❌ FAIL'}")
+    print(
+        f"UC3 - 조선일보 (New Site - Korean):  {'✅ PASS' if results['uc3_chosun'] else '❌ FAIL'}"
+    )
     print(f"\n성공률: {sum(results.values())}/3 = {sum(results.values())/3*100:.1f}%")
-    print("="*80)
+    print("=" * 80)

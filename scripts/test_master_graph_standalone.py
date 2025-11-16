@@ -16,17 +16,18 @@ Usage:
 Phase A: Master Graph 독립 검증
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.workflow.master_crawl_workflow import build_master_graph, MasterCrawlState
-from loguru import logger
 import requests
+from loguru import logger
+
+from src.workflow.master_crawl_workflow import MasterCrawlState, build_master_graph
 
 
 def print_section(title: str):
@@ -99,7 +100,7 @@ def test_scenario_1_uc1_success():
         "uc3_discovery_result": None,
         "final_result": None,
         "error_message": None,
-        "workflow_history": []
+        "workflow_history": [],
     }
 
     logger.info("\n📊 초기 State:")
@@ -141,6 +142,7 @@ def test_scenario_1_uc1_success():
     except Exception as e:
         logger.error(f"\n❌ 시나리오 1 실패: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -192,7 +194,7 @@ def test_scenario_2_uc1_failure_uc2():
         "uc3_discovery_result": None,
         "final_result": None,
         "error_message": None,
-        "workflow_history": []
+        "workflow_history": [],
     }
 
     logger.info("\n📊 초기 State:")
@@ -229,6 +231,7 @@ def test_scenario_2_uc1_failure_uc2():
     except Exception as e:
         logger.error(f"\n❌ 시나리오 2 실패: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -292,7 +295,7 @@ def test_scenario_3_uc3_new_site():
         "uc3_discovery_result": None,
         "final_result": None,
         "error_message": None,
-        "workflow_history": []
+        "workflow_history": [],
     }
 
     logger.info("\n📊 초기 State:")
@@ -318,7 +321,9 @@ def test_scenario_3_uc3_new_site():
         logger.info(f"\n📈 UC3 결과:")
         uc3_result = result.get("uc3_discovery_result", {})
         if uc3_result:
-            logger.info(f"   - selectors_discovered: {bool(uc3_result.get('selectors_discovered'))}")
+            logger.info(
+                f"   - selectors_discovered: {bool(uc3_result.get('selectors_discovered'))}"
+            )
             logger.info(f"   - confidence: {uc3_result.get('confidence', 0):.2f}")
 
             if uc3_result.get("selectors_discovered"):
@@ -346,6 +351,7 @@ def test_scenario_3_uc3_new_site():
     except Exception as e:
         logger.error(f"\n❌ 시나리오 3 실패: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -396,6 +402,7 @@ def main():
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
 
     main()

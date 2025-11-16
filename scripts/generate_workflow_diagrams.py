@@ -9,8 +9,8 @@ Usage:
     PYTHONPATH=/Users/charlee/Desktop/Intern/crawlagent poetry run python scripts/generate_workflow_diagrams.py
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 # Add project root to path
@@ -290,7 +290,8 @@ print(f"🌐 시각화: https://mermaid.live 에서 확인 가능\n")
 print("=" * 80)
 print("📊 생성 완료 요약")
 print("=" * 80)
-print(f"""
+print(
+    f"""
 ✅ 총 6개 다이어그램 생성:
 
 1. Master Workflow (PNG): /docs/master_workflow_graph.png
@@ -308,4 +309,5 @@ print(f"""
 💡 Gradio UI에서 확인:
    - Tab 2: AI 아키텍처 설명
    - "전체 워크플로우 구조 보기" Accordion
-""")
+"""
+)

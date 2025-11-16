@@ -5,15 +5,17 @@ Purpose: Pre-session health check before starting UC1/UC2 development
 Run: python scripts/verify_environment.py
 """
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
+
 
 def print_header(text):
     """Print section header"""
     print(f"\n{'='*60}")
     print(f"  {text}")
     print(f"{'='*60}\n")
+
 
 def check_postgres():
     """Check PostgreSQL container status"""
@@ -23,7 +25,7 @@ def check_postgres():
             ["docker", "ps", "--filter", "name=newsflow-postgres", "--format", "{{.Status}}"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
         if "Up" in result.stdout:
             print("   [OK] PostgreSQL container is running")
@@ -39,6 +41,7 @@ def check_postgres():
         print(f"   [ERROR] Failed to check Docker: {e}")
         return False
 
+
 def check_database_data():
     """Check if crawl data exists"""
     print("\n[2/5] Checking Database Data...")
@@ -48,12 +51,12 @@ def check_database_data():
 
         db = next(get_db())
         try:
-            count = db.query(CrawlResult).filter_by(site_name='yonhap').count()
+            count = db.query(CrawlResult).filter_by(site_name="yonhap").count()
             if count > 0:
                 print(f"   [OK] Found {count} articles in database")
 
                 # Quality score check
-                results = db.query(CrawlResult).filter_by(site_name='yonhap').all()
+                results = db.query(CrawlResult).filter_by(site_name="yonhap").all()
                 scores = [r.quality_score for r in results if r.quality_score]
                 if scores:
                     avg_score = sum(scores) / len(scores)
@@ -70,11 +73,13 @@ def check_database_data():
         print("   [FIX] Check PostgreSQL connection and schema")
         return False
 
+
 def check_dependencies():
     """Check Python dependencies"""
     print("\n[3/5] Checking Python Dependencies...")
     try:
         import langgraph
+
         print(f"   [OK] langgraph {langgraph.__version__}")
     except ImportError:
         print("   [ERROR] langgraph not installed")
@@ -82,6 +87,7 @@ def check_dependencies():
 
     try:
         import gradio
+
         print(f"   [OK] gradio {gradio.__version__}")
     except ImportError:
         print("   [ERROR] gradio not installed")
@@ -89,6 +95,7 @@ def check_dependencies():
 
     try:
         import scrapy
+
         print(f"   [OK] scrapy {scrapy.__version__}")
     except ImportError:
         print("   [ERROR] scrapy not installed")
@@ -96,6 +103,7 @@ def check_dependencies():
 
     try:
         from langchain_openai import ChatOpenAI
+
         print("   [OK] langchain-openai installed")
     except ImportError:
         print("   [ERROR] langchain-openai not installed")
@@ -103,12 +111,14 @@ def check_dependencies():
 
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
+
         print("   [OK] langchain-google-genai installed")
     except ImportError:
         print("   [ERROR] langchain-google-genai not installed")
         return False
 
     return True
+
 
 def check_documentation():
     """Check if documentation files exist"""
@@ -120,7 +130,7 @@ def check_documentation():
         "claude.md",
         "newsflow-session-handoff.md",
         "newsflow-codebase-quality-report.md",
-        "newsflow-langgraph-patterns-from-learning.md"
+        "newsflow-langgraph-patterns-from-learning.md",
     ]
 
     all_exist = True
@@ -134,13 +144,15 @@ def check_documentation():
 
     return all_exist
 
+
 def check_environment_vars():
     """Check environment variables"""
     print("\n[5/5] Checking Environment Variables...")
 
     try:
-        from dotenv import load_dotenv
         import os
+
+        from dotenv import load_dotenv
 
         load_dotenv()
 
@@ -160,6 +172,7 @@ def check_environment_vars():
         print(f"   [ERROR] Failed to load .env: {e}")
         return False
 
+
 def main():
     """Run all verification checks"""
     print_header("NewsFlow PoC - Environment Verification")
@@ -169,7 +182,7 @@ def main():
         "database": check_database_data(),
         "dependencies": check_dependencies(),
         "documentation": check_documentation(),
-        "env_vars": check_environment_vars()
+        "env_vars": check_environment_vars(),
     }
 
     print_header("Verification Summary")
@@ -191,9 +204,10 @@ def main():
                 print(f"   - {check}")
         print("\n   Fix the issues above before starting UC1 development.")
 
-    print("\n" + "="*60 + "\n")
+    print("\n" + "=" * 60 + "\n")
 
     return 0 if all_passed else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

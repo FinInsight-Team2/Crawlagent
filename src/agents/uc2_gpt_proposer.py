@@ -11,9 +11,11 @@ import json
 import os
 import time
 from typing import Dict, Optional
-from openai import OpenAI
+
 from loguru import logger
-from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+from openai import OpenAI
+
+from src.agents.few_shot_retriever import format_few_shot_prompt, get_few_shot_examples
 
 # OpenAI API 설정
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -23,7 +25,7 @@ def propose_selectors(
     url: str,
     html_content: str,
     site_name: str = "unknown",
-    previous_selectors: Optional[Dict[str, str]] = None
+    previous_selectors: Optional[Dict[str, str]] = None,
 ) -> Dict:
     """
     GPT-4o-mini에게 CSS Selector 제안 요청 (MVP)
@@ -56,7 +58,9 @@ def propose_selectors(
     # HTML 크기 제한 (GPT 토큰 절약)
     MAX_HTML_SIZE = 50000  # 50KB
     if len(html_content) > MAX_HTML_SIZE:
-        logger.warning(f"[GPT Proposer] HTML 크기 {len(html_content)} bytes → {MAX_HTML_SIZE} bytes로 제한")
+        logger.warning(
+            f"[GPT Proposer] HTML 크기 {len(html_content)} bytes → {MAX_HTML_SIZE} bytes로 제한"
+        )
         html_content = html_content[:MAX_HTML_SIZE]
 
     # Few-Shot Examples 가져오기
@@ -76,26 +80,21 @@ def propose_selectors(
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a CSS selector expert specializing in web scraping. Always respond with valid JSON only."
+                        "content": "You are a CSS selector expert specializing in web scraping. Always respond with valid JSON only.",
                     },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,  # 일관된 결과를 위해 낮은 temperature
-                response_format={"type": "json_object"}  # JSON mode 강제
+                response_format={"type": "json_object"},  # JSON mode 강제
             )
 
             # JSON 파싱
             result = json.loads(response.choices[0].message.content.strip())
 
             # 로깅
-            confidence = result.get('confidence', 0)
-            reasoning = result.get('reasoning', '')[:100]
-            logger.success(
-                f"[GPT Proposer] ✅ confidence={confidence}% - {reasoning}"
-            )
+            confidence = result.get("confidence", 0)
+            reasoning = result.get("reasoning", "")[:100]
+            logger.success(f"[GPT Proposer] ✅ confidence={confidence}% - {reasoning}")
 
             return result
 
@@ -124,7 +123,7 @@ def propose_selectors(
                 "body_selector": None,
                 "date_selector": None,
                 "reasoning": f"GPT 호출 실패: {error_msg[:100]}",
-                "confidence": 0
+                "confidence": 0,
             }
 
     # 모든 재시도 실패 (안전망)
@@ -133,7 +132,7 @@ def propose_selectors(
         "body_selector": None,
         "date_selector": None,
         "reasoning": "모든 재시도 실패",
-        "confidence": 0
+        "confidence": 0,
     }
 
 
@@ -142,7 +141,7 @@ def _build_prompt(
     html_content: str,
     site_name: str,
     previous_selectors: Optional[Dict[str, str]],
-    few_shot_examples: list = None
+    few_shot_examples: list = None,
 ) -> str:
     """GPT-4o-mini용 프롬프트 생성 (Few-Shot Examples 포함)"""
 

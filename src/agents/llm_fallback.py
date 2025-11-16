@@ -15,45 +15,42 @@ Usage:
     )
 """
 
-import os
 import logging
-from typing import Optional, Dict, Any, Literal
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
+import os
+from typing import Any, Dict, Literal, Optional
+
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 logger = logging.getLogger(__name__)
 
 # Provider configurations
 PROVIDER_CONFIGS = {
     "openai": {
-        "models": {
-            "gpt-4o": "gpt-4o",
-            "gpt-4o-mini": "gpt-4o-mini",
-            "default": "gpt-4o"
-        },
-        "env_key": "OPENAI_API_KEY"
+        "models": {"gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini", "default": "gpt-4o"},
+        "env_key": "OPENAI_API_KEY",
     },
     "gemini": {
         "models": {
-            "gemini-2.5-pro": "gemini-2.0-flash-exp",  # Free tier
+            "gemini-2.5-pro": "gemini-exp-1206",  # Gemini 2.5 Pro Experimental (최고 성능)
+            "gemini-exp-1206": "gemini-exp-1206",
             "gemini-2.0-flash": "gemini-2.0-flash-exp",
-            "default": "gemini-2.0-flash-exp"
+            "default": "gemini-exp-1206",  # Default to highest performance model
         },
-        "env_key": "GOOGLE_API_KEY"
-    }
+        "env_key": "GOOGLE_API_KEY",
+    },
 }
 
 
 class LLMFallbackError(Exception):
     """Raised when both primary and fallback LLMs fail"""
+
     pass
 
 
 def _get_llm_client(
-    provider: Literal["openai", "gemini"],
-    model: Optional[str] = None,
-    temperature: float = 0.0
+    provider: Literal["openai", "gemini"], model: Optional[str] = None, temperature: float = 0.0
 ):
     """
     Get LLM client for specified provider
@@ -97,17 +94,9 @@ def _get_llm_client(
 
     # Create client
     if provider == "openai":
-        return ChatOpenAI(
-            model=model,
-            temperature=temperature,
-            api_key=api_key
-        )
+        return ChatOpenAI(model=model, temperature=temperature, api_key=api_key)
     elif provider == "gemini":
-        return ChatGoogleGenerativeAI(
-            model=model,
-            temperature=temperature,
-            google_api_key=api_key
-        )
+        return ChatGoogleGenerativeAI(model=model, temperature=temperature, google_api_key=api_key)
 
 
 def call_with_fallback(
@@ -117,7 +106,7 @@ def call_with_fallback(
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.0,
-    response_format: Optional[Dict[str, Any]] = None
+    response_format: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Call LLM with automatic fallback on failure
@@ -179,7 +168,7 @@ def call_with_fallback(
             "content": response.content,
             "provider": primary,
             "model": model or PROVIDER_CONFIGS[primary]["models"]["default"],
-            "fallback_used": False
+            "fallback_used": False,
         }
 
     except Exception as primary_error:
@@ -209,7 +198,7 @@ def call_with_fallback(
                 "provider": fallback,
                 "model": fallback_model or PROVIDER_CONFIGS[fallback]["models"]["default"],
                 "fallback_used": True,
-                "primary_error": str(primary_error)
+                "primary_error": str(primary_error),
             }
 
         except Exception as fallback_error:
@@ -281,11 +270,12 @@ def get_recommended_fallback(primary: str) -> Optional[str]:
 
 # Convenience functions for specific use cases
 
+
 def call_openai_with_gemini_fallback(
     prompt: str,
     system_prompt: Optional[str] = None,
     model: str = "gpt-4o",
-    temperature: float = 0.0
+    temperature: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Call OpenAI GPT with Gemini fallback (most common UC2/UC3 pattern)
@@ -312,7 +302,7 @@ def call_openai_with_gemini_fallback(
         prompt=prompt,
         system_prompt=system_prompt,
         model=model,
-        temperature=temperature
+        temperature=temperature,
     )
 
 
@@ -320,7 +310,7 @@ def call_gemini_with_openai_fallback(
     prompt: str,
     system_prompt: Optional[str] = None,
     model: str = "gemini-2.0-flash",
-    temperature: float = 0.0
+    temperature: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Call Gemini with OpenAI fallback (for Gemini-first scenarios)
@@ -347,5 +337,5 @@ def call_gemini_with_openai_fallback(
         prompt=prompt,
         system_prompt=system_prompt,
         model=model,
-        temperature=temperature
+        temperature=temperature,
     )

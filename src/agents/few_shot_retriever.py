@@ -8,8 +8,10 @@ Few-Shot Selector Pattern Retriever
 작성일: 2025-11-12
 """
 
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
+
 from loguru import logger
+
 from src.storage.database import get_db
 from src.storage.models import Selector
 
@@ -43,11 +45,13 @@ def get_few_shot_examples(category: str = "news", limit: int = 5) -> List[Dict]:
 
         # 성공 횟수가 있는 selector만 가져오기 (최근 업데이트 순)
         # is_active 필드가 없으므로 success_count > 0 사용
-        selectors = db.query(Selector).filter(
-            Selector.success_count > 0
-        ).order_by(
-            Selector.updated_at.desc()  # 최근 업데이트된 것 우선
-        ).limit(limit).all()
+        selectors = (
+            db.query(Selector)
+            .filter(Selector.success_count > 0)
+            .order_by(Selector.updated_at.desc())  # 최근 업데이트된 것 우선
+            .limit(limit)
+            .all()
+        )
 
         if not selectors:
             logger.warning("[Few-Shot] No active selectors found in DB")
@@ -56,13 +60,15 @@ def get_few_shot_examples(category: str = "news", limit: int = 5) -> List[Dict]:
         examples = []
         for sel in selectors:
             pattern_analysis = analyze_selector_pattern(sel)
-            examples.append({
-                "site_name": sel.site_name,
-                "title_selector": sel.title_selector or "",
-                "body_selector": sel.body_selector or "",
-                "date_selector": sel.date_selector or "",
-                "pattern_analysis": pattern_analysis
-            })
+            examples.append(
+                {
+                    "site_name": sel.site_name,
+                    "title_selector": sel.title_selector or "",
+                    "body_selector": sel.body_selector or "",
+                    "date_selector": sel.date_selector or "",
+                    "pattern_analysis": pattern_analysis,
+                }
+            )
 
         logger.info(f"[Few-Shot] Retrieved {len(examples)} examples from DB")
         return examples
@@ -160,8 +166,8 @@ def format_few_shot_prompt(examples: List[Dict], include_patterns: bool = True) 
         prompt_text += f"  - 본문: {ex['body_selector']}\n"
         prompt_text += f"  - 날짜: {ex['date_selector']}\n"
 
-        if include_patterns and ex.get('pattern_analysis'):
-            pa = ex['pattern_analysis']
+        if include_patterns and ex.get("pattern_analysis"):
+            pa = ex["pattern_analysis"]
             prompt_text += f"  - 패턴 분석:\n"
             prompt_text += f"    * 제목 패턴: {pa.get('title_pattern', 'N/A')}\n"
             prompt_text += f"    * 본문 패턴: {pa.get('body_pattern', 'N/A')}\n"
@@ -186,9 +192,9 @@ if __name__ == "__main__":
             print(f"Body: {ex['body_selector']}")
             print(f"Pattern: {ex['pattern_analysis']}")
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("GPT Prompt Format:")
-        print("="*80)
+        print("=" * 80)
         print(format_few_shot_prompt(examples))
     else:
         print("❌ No examples found in DB")

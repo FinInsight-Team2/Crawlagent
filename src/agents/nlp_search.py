@@ -161,11 +161,14 @@ def parse_natural_query(query: str) -> Dict:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a news search query parser. Output only valid JSON."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a news search query parser. Output only valid JSON.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=500
+            max_tokens=500,
         )
 
         result_text = response.choices[0].message.content.strip()
@@ -189,7 +192,7 @@ def parse_natural_query(query: str) -> Dict:
             "date_from": parsed.get("date_from") or "",
             "date_to": parsed.get("date_to") or "",
             "min_quality": parsed.get("min_quality") or 0,
-            "reasoning": parsed.get("reasoning", "자연어 쿼리 파싱 완료")
+            "reasoning": parsed.get("reasoning", "자연어 쿼리 파싱 완료"),
         }
 
     except json.JSONDecodeError as e:
@@ -206,7 +209,7 @@ if __name__ == "__main__":
         "11월 7일 연합뉴스 정치 기사",
         "대통령 발언 관련 기사",
         "오늘 경제 뉴스",
-        "최근 3일 사회 카테고리"
+        "최근 3일 사회 카테고리",
     ]
 
     for query in test_queries:

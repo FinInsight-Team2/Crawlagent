@@ -31,11 +31,9 @@ from contextlib import contextmanager
 def db_engine():
     """PostgreSQL Docker 엔진 사용 (실제 환경과 동일)"""
     from src.storage.models import Base
-    from src.storage.database import get_engine
+    from src.storage.database import engine
 
     # 실제 PostgreSQL Docker 엔진 사용
-    engine = get_engine()
-
     yield engine
 
     # Cleanup: 엔진은 재사용하므로 dispose 안 함

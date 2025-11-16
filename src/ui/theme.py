@@ -46,19 +46,16 @@ class CrawlAgentDarkTheme(Base):
             background_fill_primary_dark="#1a1b1e",
             background_fill_secondary="#2d2e32",
             background_fill_secondary_dark="#2d2e32",
-
             # 카드/컨테이너
             block_background_fill="#2d2e32",
             block_background_fill_dark="#2d2e32",
             block_border_color="#4a4b4f",
             block_border_color_dark="#4a4b4f",
-
             # 텍스트
             body_text_color="#e5e7eb",
             body_text_color_dark="#e5e7eb",
             body_text_color_subdued="#9ca3af",
             body_text_color_subdued_dark="#9ca3af",
-
             # 버튼 - Primary
             button_primary_background_fill="#667eea",
             button_primary_background_fill_dark="#667eea",
@@ -68,7 +65,6 @@ class CrawlAgentDarkTheme(Base):
             button_primary_text_color_dark="#ffffff",
             button_primary_border_color="#667eea",
             button_primary_border_color_dark="#667eea",
-
             # 버튼 - Secondary
             button_secondary_background_fill="#3a3b3f",
             button_secondary_background_fill_dark="#3a3b3f",
@@ -78,7 +74,6 @@ class CrawlAgentDarkTheme(Base):
             button_secondary_text_color_dark="#e5e7eb",
             button_secondary_border_color="#4a4b4f",
             button_secondary_border_color_dark="#4a4b4f",
-
             # 입력 필드
             input_background_fill="#3a3b3f",
             input_background_fill_dark="#3a3b3f",
@@ -88,19 +83,16 @@ class CrawlAgentDarkTheme(Base):
             input_border_color_dark="#4a4b4f",
             input_border_color_focus="#667eea",
             input_border_color_focus_dark="#667eea",
-
             # 경계선
             border_color_primary="#4a4b4f",
             border_color_primary_dark="#4a4b4f",
             border_color_accent="#667eea",
             border_color_accent_dark="#667eea",
-
             # 링크
             link_text_color="#667eea",
             link_text_color_dark="#667eea",
             link_text_color_hover="#5568d3",
             link_text_color_hover_dark="#5568d3",
-
             # Shadow
             shadow_drop="0 4px 6px rgba(0,0,0,0.3)",
             shadow_drop_lg="0 10px 15px rgba(0,0,0,0.4)",

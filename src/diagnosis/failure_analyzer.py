@@ -4,7 +4,7 @@ Failure Analyzer for CrawlAgent Diagnosis System
 Provides detailed analysis of failures with breakdowns and root cause identification.
 """
 
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 
 class FailureAnalyzer:
@@ -19,7 +19,7 @@ class FailureAnalyzer:
         gemini_confidence: float,
         extraction_quality: float,
         threshold: float,
-        use_case: str = "UC2"
+        use_case: str = "UC2",
     ) -> Dict[str, Any]:
         """
         Analyze Consensus failure with detailed breakdown
@@ -52,11 +52,7 @@ class FailureAnalyzer:
         """
 
         # Calculate consensus score (weighted average)
-        score = (
-            gpt_confidence * 0.3 +
-            gemini_confidence * 0.3 +
-            extraction_quality * 0.4
-        )
+        score = gpt_confidence * 0.3 + gemini_confidence * 0.3 + extraction_quality * 0.4
 
         # Individual contributions
         breakdown = {
@@ -65,7 +61,7 @@ class FailureAnalyzer:
             "extraction_contribution": round(extraction_quality * 0.4, 3),
             "gpt_confidence": round(gpt_confidence, 3),
             "gemini_confidence": round(gemini_confidence, 3),
-            "extraction_quality": round(extraction_quality, 3)
+            "extraction_quality": round(extraction_quality, 3),
         }
 
         # Identify root cause (lowest component)
@@ -74,7 +70,9 @@ class FailureAnalyzer:
             explanation = f"Gemini Validator가 GPT 제안을 검증하지 못했습니다 (신뢰도: {gemini_confidence:.2f})"
         elif gpt_confidence < 0.4:
             root_cause = "gpt_low"
-            explanation = f"GPT Proposer가 낮은 신뢰도로 제안했습니다 (신뢰도: {gpt_confidence:.2f})"
+            explanation = (
+                f"GPT Proposer가 낮은 신뢰도로 제안했습니다 (신뢰도: {gpt_confidence:.2f})"
+            )
         elif extraction_quality < 0.4:
             root_cause = "extraction_low"
             explanation = f"실제 추출 결과가 부정확합니다 (품질: {extraction_quality:.2f})"
@@ -93,16 +91,12 @@ class FailureAnalyzer:
             "explanation": explanation,
             "gap": round(gap, 3),
             "use_case": use_case,
-            "passed": score >= threshold
+            "passed": score >= threshold,
         }
 
     @staticmethod
     def analyze_quality_failure(
-        title: str,
-        body: str,
-        date: Optional[str],
-        url: str,
-        quality_score: int
+        title: str, body: str, date: Optional[str], url: str, quality_score: int
     ) -> Dict[str, Any]:
         """
         Analyze UC1 quality validation failure
@@ -145,7 +139,7 @@ class FailureAnalyzer:
             "url_score": url_score,
             "title_length": len(title),
             "body_length": len(body),
-            "has_date": bool(date)
+            "has_date": bool(date),
         }
 
         # Identify root cause (lowest score)
@@ -171,14 +165,12 @@ class FailureAnalyzer:
             "root_cause": root_cause,
             "explanation": explanation,
             "threshold": 80,
-            "gap": 80 - quality_score
+            "gap": 80 - quality_score,
         }
 
     @staticmethod
     def analyze_http_error(
-        status_code: int,
-        url: str,
-        error_message: Optional[str] = None
+        status_code: int, url: str, error_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyze HTTP/Network error
@@ -229,14 +221,14 @@ class FailureAnalyzer:
             "explanation": explanation,
             "is_permanent": is_permanent,
             "url": url,
-            "error_message": error_message or "N/A"
+            "error_message": error_message or "N/A",
         }
 
     @staticmethod
     def analyze_parsing_error(
         extraction_result: Optional[Dict[str, Any]],
         html_length: int,
-        selector_info: Optional[Dict[str, str]] = None
+        selector_info: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Analyze parsing/extraction error
@@ -285,5 +277,5 @@ class FailureAnalyzer:
             "extraction_result": extraction_result,
             "root_cause": root_cause,
             "explanation": explanation,
-            "selector_info": selector_info or {}
+            "selector_info": selector_info or {},
         }

@@ -9,7 +9,8 @@ Created: 2025-11-04
 
 import re
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 from bs4 import BeautifulSoup
 
 
@@ -31,11 +32,11 @@ def clean_html_tags(text: str) -> str:
         return ""
 
     # BeautifulSoup로 HTML 파싱 후 텍스트만 추출
-    soup = BeautifulSoup(text, 'html.parser')
+    soup = BeautifulSoup(text, "html.parser")
 
     # <br> 태그를 줄바꿈으로 변환 (제거 전)
-    for br in soup.find_all('br'):
-        br.replace_with('\n')
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
 
     # 모든 HTML 태그 제거
     text = soup.get_text()
@@ -62,10 +63,10 @@ def normalize_whitespace(text: str) -> str:
         return ""
 
     # 연속된 공백 → 단일 공백
-    text = re.sub(r' +', ' ', text)
+    text = re.sub(r" +", " ", text)
 
     # 연속된 줄바꿈 (3개 이상) → 2개로 제한
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
 
     # 앞뒤 공백 제거
     text = text.strip()
@@ -93,18 +94,18 @@ def remove_ad_patterns(text: str) -> str:
 
     # 광고 패턴 정의
     ad_patterns = [
-        r'▶.*?\n',           # ▶로 시작하는 줄
-        r'◀.*?\n',           # ◀로 시작하는 줄
-        r'※.*?\n',           # ※로 시작하는 줄
-        r'관련[\s]*기사.*?\n',  # 관련기사
-        r'이[\s]*시각[\s]*인기[\s]*기사.*?\n',  # 이 시각 인기 기사
-        r'함께[\s]*보면[\s]*좋은.*?\n',  # 함께 보면 좋은
-        r'\[.*?기자\]',       # [OOO 기자] (중복 서명)
-        r'\(.*?@.*?\)',       # 이메일 주소
+        r"▶.*?\n",  # ▶로 시작하는 줄
+        r"◀.*?\n",  # ◀로 시작하는 줄
+        r"※.*?\n",  # ※로 시작하는 줄
+        r"관련[\s]*기사.*?\n",  # 관련기사
+        r"이[\s]*시각[\s]*인기[\s]*기사.*?\n",  # 이 시각 인기 기사
+        r"함께[\s]*보면[\s]*좋은.*?\n",  # 함께 보면 좋은
+        r"\[.*?기자\]",  # [OOO 기자] (중복 서명)
+        r"\(.*?@.*?\)",  # 이메일 주소
     ]
 
     for pattern in ad_patterns:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
     return text
 
@@ -131,7 +132,7 @@ def normalize_date_format(date_str: Optional[str]) -> Optional[str]:
 
     try:
         # ISO 8601 파싱
-        dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         return dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
         # 파싱 실패 시 원본 반환
@@ -158,12 +159,12 @@ def extract_reporter_info(text: str) -> Dict[str, Optional[str]]:
         return result
 
     # 패턴 1: "홍길동 기자"
-    match = re.search(r'([가-힣]{2,4})\s*기자', text)
+    match = re.search(r"([가-힣]{2,4})\s*기자", text)
     if match:
         result["reporter_name"] = match.group(1)
 
     # 패턴 2: 이메일
-    match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
+    match = re.search(r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", text)
     if match:
         result["reporter_email"] = match.group(1)
 
@@ -171,9 +172,7 @@ def extract_reporter_info(text: str) -> Dict[str, Optional[str]]:
 
 
 def preprocess_article(
-    title: Optional[str],
-    body: Optional[str],
-    date: Optional[str]
+    title: Optional[str], body: Optional[str], date: Optional[str]
 ) -> Dict[str, Any]:
     """
     기사 전체 전처리 (메인 함수)
@@ -232,7 +231,7 @@ def preprocess_article(
         "date": clean_date,
         "reporter_name": reporter_info["reporter_name"],
         "reporter_email": reporter_info["reporter_email"],
-        "word_count": word_count
+        "word_count": word_count,
     }
 
 
@@ -248,9 +247,7 @@ if __name__ == "__main__":
     """
 
     result = preprocess_article(
-        title="<h1>테스트</h1>",
-        body=test_html,
-        date="2025-11-04T15:30:00+09:00"
+        title="<h1>테스트</h1>", body=test_html, date="2025-11-04T15:30:00+09:00"
     )
 
     print("=== 전처리 결과 ===")

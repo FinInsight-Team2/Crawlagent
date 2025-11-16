@@ -9,9 +9,9 @@ Created: 2025-11-11
 4. 상세한 에러 메시지 수집 및 분석
 """
 
+import asyncio
 import os
 import sys
-import asyncio
 from pathlib import Path
 
 # Add project root to Python path
@@ -26,7 +26,11 @@ load_dotenv()
 
 # Configure logger
 logger.remove()
-logger.add(sys.stdout, level="INFO", format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
+logger.add(
+    sys.stdout,
+    level="INFO",
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+)
 
 
 async def test_openai_api():
@@ -51,9 +55,7 @@ async def test_openai_api():
         # Simple test: List models
         logger.info("🔍 OpenAI API 연결 테스트 중...")
         response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=5
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "Hello"}], max_tokens=5
         )
 
         logger.success("✅ OpenAI API 연결 성공!")
@@ -123,8 +125,8 @@ async def test_uc3_directly():
     logger.info(f"🎯 테스트 URL: {test_url}")
 
     try:
-        from src.workflow.uc3_discovery import uc3_discovery_node
         from src.workflow.master_crawl_workflow import MasterCrawlState
+        from src.workflow.uc3_discovery import uc3_discovery_node
 
         # Create minimal state
         state: MasterCrawlState = {
@@ -153,7 +155,7 @@ async def test_uc3_directly():
         logger.success("✅ UC3 실행 완료!")
 
         # Analyze result
-        if hasattr(result, 'update'):
+        if hasattr(result, "update"):
             update = result.update
             uc3_result = update.get("uc3_discovery_result", {})
 
@@ -197,6 +199,7 @@ async def test_uc3_directly():
             logger.warning("   💡 API 응답 시간 초과")
 
         import traceback
+
         logger.error("   전체 스택 트레이스:")
         traceback.print_exc()
 
@@ -213,7 +216,7 @@ async def analyze_failure_reasons():
     # Check database for existing Daum records
     try:
         from src.storage.database import get_db
-        from src.storage.models import Selector, DecisionLog
+        from src.storage.models import DecisionLog, Selector
 
         db = next(get_db())
 
@@ -229,9 +232,13 @@ async def analyze_failure_reasons():
             logger.warning("⚠️  Daum Selector가 DB에 없습니다 (새 사이트)")
 
         # Check recent decision logs for Daum
-        recent_logs = db.query(DecisionLog).filter(
-            DecisionLog.site_name == "daum"
-        ).order_by(DecisionLog.created_at.desc()).limit(3).all()
+        recent_logs = (
+            db.query(DecisionLog)
+            .filter(DecisionLog.site_name == "daum")
+            .order_by(DecisionLog.created_at.desc())
+            .limit(3)
+            .all()
+        )
 
         if recent_logs:
             logger.info(f"📋 최근 Daum 관련 DecisionLog {len(recent_logs)}개:")
@@ -248,7 +255,8 @@ async def analyze_failure_reasons():
     logger.info("=" * 60)
     logger.info("📊 진단 요약")
     logger.info("=" * 60)
-    logger.info("""
+    logger.info(
+        """
 다음 단계로 진행하세요:
 
 1. API 키가 모두 유효한 경우:
@@ -267,7 +275,8 @@ async def analyze_failure_reasons():
 4. 네트워크 에러:
    → 인터넷 연결 확인
    → 방화벽 설정 확인
-    """)
+    """
+    )
 
 
 async def main():

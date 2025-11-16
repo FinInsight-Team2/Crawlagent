@@ -18,11 +18,12 @@ import json
 import os
 from typing import Dict, Literal
 
-from openai import OpenAI
 from loguru import logger
+from openai import OpenAI
 
 # OpenAI 클라이언트 (lazy initialization)
 _client = None
+
 
 def get_openai_client():
     """OpenAI 클라이언트 lazy initialization"""
@@ -69,9 +70,7 @@ def validate_quality(
     """
     # Content-Type별 프롬프트 선택
     if content_type == "news":
-        prompt = get_news_validation_prompt(
-            title, body[:1000], date, category, category_kr, url
-        )
+        prompt = get_news_validation_prompt(title, body[:1000], date, category, category_kr, url)
     elif content_type == "blog":
         prompt = get_blog_validation_prompt(title, body[:1000], category_kr)
     elif content_type == "community":
@@ -91,11 +90,14 @@ def validate_quality(
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a news quality validation expert. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are a news quality validation expert. Always respond with valid JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,  # 일관된 결과를 위해 낮은 temperature
-                response_format={"type": "json_object"}  # JSON mode 강제
+                response_format={"type": "json_object"},  # JSON mode 강제
             )
 
             # JSON 파싱
@@ -114,7 +116,7 @@ def validate_quality(
                     "content_type_detected": "unknown",
                     "body_complete": None,
                     "date_present": bool(date),
-                    "reasoning": f"JSON 파싱 실패: {str(e)}"
+                    "reasoning": f"JSON 파싱 실패: {str(e)}",
                 }
 
             logger.info(
@@ -145,7 +147,7 @@ def validate_quality(
                         "content_type_detected": "unknown",
                         "body_complete": None,
                         "date_present": bool(date),
-                        "reasoning": f"Rate Limit 초과"
+                        "reasoning": f"Rate Limit 초과",
                     }
             else:
                 # Rate Limit 아닌 다른 에러
@@ -157,7 +159,7 @@ def validate_quality(
                     "content_type_detected": "unknown",
                     "body_complete": None,
                     "date_present": bool(date),
-                    "reasoning": f"예외 발생: {str(e)}"
+                    "reasoning": f"예외 발생: {str(e)}",
                 }
 
     # 모든 재시도 실패 (여기 도달하면 안 됨 - 안전망)
@@ -168,17 +170,12 @@ def validate_quality(
         "content_type_detected": "unknown",
         "body_complete": None,
         "date_present": bool(date),
-        "reasoning": "모든 재시도 실패"
+        "reasoning": "모든 재시도 실패",
     }
 
 
 def get_news_validation_prompt(
-    title: str,
-    body_preview: str,
-    date: str,
-    category: str,
-    category_kr: str,
-    url: str
+    title: str, body_preview: str, date: str, category: str, category_kr: str, url: str
 ) -> str:
     """
     뉴스 기사 검증을 위한 GPT 프롬프트 생성 (모든 카테고리 대응)

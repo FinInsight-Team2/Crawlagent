@@ -14,10 +14,12 @@ Selectors (2025-11-02 기준):
     - Date: time[datetime]
 """
 
-import scrapy
 from datetime import datetime
+
+import scrapy
+
 from src.storage.database import get_db
-from src.storage.models import Selector, CrawlResult
+from src.storage.models import CrawlResult, Selector
 
 
 class BBCSpider(scrapy.Spider):
@@ -76,15 +78,15 @@ class BBCSpider(scrapy.Spider):
         seen_urls = set()
         for link in article_links:
             # 절대 URL로 변환
-            if link.startswith('/'):
+            if link.startswith("/"):
                 article_url = f"https://www.bbc.com{link}"
-            elif link.startswith('http'):
+            elif link.startswith("http"):
                 article_url = link
             else:
                 continue
 
             # /live/, /topics/ 등 제외 (실제 기사만)
-            if '/live/' in article_url or '/topics/' in article_url:
+            if "/live/" in article_url or "/topics/" in article_url:
                 continue
 
             # 중복 제거
@@ -103,10 +105,7 @@ class BBCSpider(scrapy.Spider):
             self.article_count += 1
 
             # Stage 2로 이동 (article 페이지 파싱)
-            yield scrapy.Request(
-                url=article_url,
-                callback=self.parse_article
-            )
+            yield scrapy.Request(url=article_url, callback=self.parse_article)
 
     def parse_article(self, response):
         """
@@ -120,7 +119,7 @@ class BBCSpider(scrapy.Spider):
         self.logger.info(f"[STAGE 2] Parsing article: {response.url}")
 
         # Extract fields using DB selectors
-        title_raw = response.css(f'{self.selector.title_selector}::text').get()
+        title_raw = response.css(f"{self.selector.title_selector}::text").get()
 
         # Body: text-block은 여러 개이므로 모두 합침 (각 블록의 모든 하위 텍스트)
         body_blocks = response.css('div[data-component="text-block"]')
@@ -128,15 +127,15 @@ class BBCSpider(scrapy.Spider):
             body_texts = []
             for block in body_blocks:
                 # 각 블록의 모든 텍스트 추출 (하위 태그 포함)
-                texts = block.css('::text').getall()
+                texts = block.css("::text").getall()
                 body_texts.extend([t.strip() for t in texts if t.strip()])
-            body_raw = ' '.join(body_texts) if body_texts else None
+            body_raw = " ".join(body_texts) if body_texts else None
         else:
             body_raw = None
 
         # Date: time 태그의 datetime 속성 사용
-        date_element = response.css('time[datetime]')
-        date_raw = date_element.attrib.get('datetime') if date_element else None
+        date_element = response.css("time[datetime]")
+        date_raw = date_element.attrib.get("datetime") if date_element else None
 
         # Clean and process
         title = title_raw.strip() if title_raw else None
@@ -147,7 +146,7 @@ class BBCSpider(scrapy.Spider):
         if date_raw:
             try:
                 # "2025-11-02T13:35:02.703Z" → "2025-11-02"
-                date = date_raw.split('T')[0]
+                date = date_raw.split("T")[0]
             except Exception as e:
                 self.logger.warning(f"[STAGE 2] Date parsing failed: {date_raw} ({e})")
 
@@ -170,7 +169,7 @@ class BBCSpider(scrapy.Spider):
                 body=body,
                 date=date,
                 quality_score=quality_score,
-                crawl_mode="scrapy"
+                crawl_mode="scrapy",
             )
             db.add(result)
             db.commit()
@@ -182,12 +181,12 @@ class BBCSpider(scrapy.Spider):
             db.close()
 
         yield {
-            'url': response.url,
-            'site_name': 'bbc',
-            'title': title,
-            'body': body[:100] if body else None,  # 로그용 (일부만)
-            'date': date,
-            'quality_score': quality_score
+            "url": response.url,
+            "site_name": "bbc",
+            "title": title,
+            "body": body[:100] if body else None,  # 로그용 (일부만)
+            "date": date,
+            "quality_score": quality_score,
         }
 
     def calculate_quality_score(self, title, body, date, url):
@@ -221,7 +220,7 @@ class BBCSpider(scrapy.Spider):
             score += 10
 
         # URL: 10 pts
-        if url and url.startswith('http'):
+        if url and url.startswith("http"):
             score += 10
 
         return score

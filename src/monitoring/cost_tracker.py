@@ -7,15 +7,14 @@ Purpose: Track LLM API costs in real-time for ROI validation and budget manageme
 """
 
 import time
-from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 from functools import wraps
+from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
 
 from src.storage.database import get_db
 from src.storage.models import CostMetric
-
 
 # ============================================================================
 # Pricing Tables (as of 2025-11-11)
@@ -45,6 +44,7 @@ PRICING = {
 # ============================================================================
 # Core Functions
 # ============================================================================
+
 
 def calculate_cost(
     provider: str, model: str, input_tokens: int, output_tokens: int
@@ -161,6 +161,7 @@ def log_cost_to_db(
 # Decorators
 # ============================================================================
 
+
 def track_openai_cost(use_case: str = "other"):
     """
     Decorator to track OpenAI API costs
@@ -212,9 +213,7 @@ def track_openai_cost(use_case: str = "other"):
                         },
                     )
                 else:
-                    logger.warning(
-                        f"OpenAI response from {func.__name__} has no usage stats"
-                    )
+                    logger.warning(f"OpenAI response from {func.__name__} has no usage stats")
 
             except Exception as e:
                 logger.error(f"Failed to track OpenAI cost in {func.__name__}: {e}")
@@ -274,9 +273,7 @@ def track_gemini_cost(use_case: str = "other", model: str = "gemini-2.5-pro"):
                         },
                     )
                 else:
-                    logger.warning(
-                        f"Gemini response from {func.__name__} has no usage_metadata"
-                    )
+                    logger.warning(f"Gemini response from {func.__name__} has no usage_metadata")
 
             except Exception as e:
                 logger.error(f"Failed to track Gemini cost in {func.__name__}: {e}")
@@ -291,6 +288,7 @@ def track_gemini_cost(use_case: str = "other", model: str = "gemini-2.5-pro"):
 # ============================================================================
 # Analytics Functions
 # ============================================================================
+
 
 def get_total_cost(
     provider: Optional[str] = None,
@@ -362,30 +360,28 @@ def get_cost_breakdown() -> Dict[str, Any]:
 
             # By provider
             by_provider = {}
-            for row in db.query(
-                CostMetric.provider, func.sum(CostMetric.total_cost)
-            ).group_by(CostMetric.provider):
+            for row in db.query(CostMetric.provider, func.sum(CostMetric.total_cost)).group_by(
+                CostMetric.provider
+            ):
                 by_provider[row[0]] = float(row[1])
 
             # By use case
             by_use_case = {}
-            for row in db.query(
-                CostMetric.use_case, func.sum(CostMetric.total_cost)
-            ).group_by(CostMetric.use_case):
+            for row in db.query(CostMetric.use_case, func.sum(CostMetric.total_cost)).group_by(
+                CostMetric.use_case
+            ):
                 by_use_case[row[0]] = float(row[1])
 
             # By model
             by_model = {}
-            for row in db.query(
-                CostMetric.model, func.sum(CostMetric.total_cost)
-            ).group_by(CostMetric.model):
+            for row in db.query(CostMetric.model, func.sum(CostMetric.total_cost)).group_by(
+                CostMetric.model
+            ):
                 by_model[row[0]] = float(row[1])
 
             # Recent costs (last 10)
             recent = []
-            for metric in (
-                db.query(CostMetric).order_by(CostMetric.timestamp.desc()).limit(10)
-            ):
+            for metric in db.query(CostMetric).order_by(CostMetric.timestamp.desc()).limit(10):
                 recent.append(
                     {
                         "timestamp": metric.timestamp.isoformat(),

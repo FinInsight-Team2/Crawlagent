@@ -9,24 +9,25 @@ Created: 2025-11-13
 - Partial success: 2/3 fields bonus
 """
 
-import sys
 import os
+import sys
+
 from dotenv import load_dotenv
 
 # .env 파일 먼저 로드
 load_dotenv(override=True)
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.storage.database import get_db
-from src.storage.models import Selector, CrawlResult
+from src.storage.models import CrawlResult, Selector
 
 
 def show_before_stats():
     """개선 전 통계"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("📊 Phase 1 개선 전 베이스라인")
-    print("="*80)
+    print("=" * 80)
     print()
     print("| Metric | Baseline |")
     print("|--------|----------|")
@@ -37,14 +38,14 @@ def show_before_stats():
     print("| UC2 Model | GPT-4o-mini |")
     print("| Partial Success | None |")
     print()
-    print("="*80)
+    print("=" * 80)
 
 
 def show_improvements():
     """개선 내역"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("✨ Phase 1 Quick Wins 개선 내역")
-    print("="*80)
+    print("=" * 80)
     print()
     print("1️⃣  UC3 Threshold 완화")
     print("   - Before: 0.55")
@@ -66,14 +67,14 @@ def show_improvements():
     print("   - After: 2/3 fields → +0.05 bonus")
     print("   - Impact: +5-7% success rate")
     print()
-    print("="*80)
+    print("=" * 80)
 
 
 def show_expected_results():
     """예상 결과"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🎯 예상 결과")
-    print("="*80)
+    print("=" * 80)
     print()
     print("| Metric | Before | After | Improvement |")
     print("|--------|--------|-------|-------------|")
@@ -81,14 +82,14 @@ def show_expected_results():
     print("| UC3 Success Rate | 80% | 88-93% | +8-13% |")
     print("| Combined Impact | 82.5% | 90-94% | +7.5-11.5% |")
     print()
-    print("="*80)
+    print("=" * 80)
 
 
 def show_current_db_stats():
     """현재 DB 상태"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("📈 현재 DB 상태")
-    print("="*80)
+    print("=" * 80)
 
     db = next(get_db())
 
@@ -117,14 +118,14 @@ def show_current_db_stats():
         quality_rate = high_quality / total_articles * 100
         print(f"📊 Quality Rate: {quality_rate:.1f}%")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
 
 
 def show_next_steps():
     """다음 단계"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🚀 검증 방법")
-    print("="*80)
+    print("=" * 80)
     print()
     print("Option A: 새로운 사이트 테스트 (UC3)")
     print("  1. Gradio UI 실행: poetry run python -m src.ui.gradio_app")
@@ -141,7 +142,7 @@ def show_next_steps():
     print("  - 기존 selectors로 크롤링 실행")
     print("  - Success rate 확인 (85% → 95% 목표)")
     print()
-    print("="*80)
+    print("=" * 80)
 
 
 def main():
@@ -151,9 +152,9 @@ def main():
     show_current_db_stats()
     show_next_steps()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("✅ Phase 1 Quick Wins 구현 완료!")
-    print("="*80)
+    print("=" * 80)
     print()
     print("💡 다음 단계:")
     print("   1. Gradio UI로 새 사이트 테스트")
@@ -161,7 +162,7 @@ def main():
     print("   3. 예상 vs 실제 비교")
     print("   4. 필요시 Phase 2 진행")
     print()
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":

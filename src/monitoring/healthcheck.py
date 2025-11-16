@@ -17,20 +17,19 @@ Usage:
     - http://localhost:8000/docs (Swagger UI)
 """
 
-from datetime import datetime, timedelta
-from typing import Dict, Any
-import psutil
 import os
+from datetime import datetime, timedelta
+from typing import Any, Dict
 
+import psutil
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
 from loguru import logger
+from pydantic import BaseModel
 
-from src.storage.database import engine, get_db
-from src.storage.models import CrawlResult, Selector, DecisionLog, CostMetric
 from src.monitoring.cost_tracker import get_cost_breakdown, get_total_cost
-
+from src.storage.database import engine, get_db
+from src.storage.models import CostMetric, CrawlResult, DecisionLog, Selector
 
 # ============================================================================
 # FastAPI App Initialization
@@ -41,7 +40,7 @@ app = FastAPI(
     description="Production-ready monitoring and healthcheck endpoints",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
 
@@ -49,8 +48,10 @@ app = FastAPI(
 # Response Models
 # ============================================================================
 
+
 class HealthStatus(BaseModel):
     """Health check response model"""
+
     status: str  # "healthy" | "degraded" | "unhealthy"
     timestamp: str
     uptime_seconds: float
@@ -62,6 +63,7 @@ class HealthStatus(BaseModel):
 
 class MetricsResponse(BaseModel):
     """Prometheus-compatible metrics response"""
+
     total_articles: int
     total_selectors: int
     total_decision_logs: int
@@ -86,6 +88,7 @@ def get_uptime_seconds() -> float:
 # ============================================================================
 # Health Check Functions
 # ============================================================================
+
 
 def check_database_health() -> Dict[str, Any]:
     """
@@ -123,7 +126,7 @@ def check_database_health() -> Dict[str, Any]:
                 "status": "healthy",
                 "connection_pool": pool_status,
                 "table_counts": table_counts,
-                "error": None
+                "error": None,
             }
 
     except Exception as e:
@@ -132,7 +135,7 @@ def check_database_health() -> Dict[str, Any]:
             "status": "unhealthy",
             "connection_pool": None,
             "table_counts": None,
-            "error": str(e)
+            "error": str(e),
         }
 
 
@@ -146,7 +149,7 @@ def check_system_health() -> Dict[str, Any]:
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
+        disk = psutil.disk_usage("/")
 
         return {
             "status": "healthy",
@@ -158,10 +161,7 @@ def check_system_health() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"System health check failed: {e}")
-        return {
-            "status": "degraded",
-            "error": str(e)
-        }
+        return {"status": "degraded", "error": str(e)}
 
 
 def get_cost_metrics() -> Dict[str, Any]:
@@ -178,8 +178,7 @@ def get_cost_metrics() -> Dict[str, Any]:
         # Today's cost
         today = datetime.utcnow().date()
         today_cost = get_total_cost(
-            start_date=datetime.combine(today, datetime.min.time()),
-            end_date=datetime.utcnow()
+            start_date=datetime.combine(today, datetime.min.time()), end_date=datetime.utcnow()
         )
 
         # Cost breakdown
@@ -195,10 +194,7 @@ def get_cost_metrics() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Cost metrics check failed: {e}")
-        return {
-            "status": "degraded",
-            "error": str(e)
-        }
+        return {"status": "degraded", "error": str(e)}
 
 
 def get_article_metrics() -> Dict[str, Any]:
@@ -216,16 +212,18 @@ def get_article_metrics() -> Dict[str, Any]:
 
             # Average quality
             if total > 0:
-                scores = [r.quality_score for r in db.query(CrawlResult.quality_score).all() if r.quality_score]
+                scores = [
+                    r.quality_score
+                    for r in db.query(CrawlResult.quality_score).all()
+                    if r.quality_score
+                ]
                 avg_quality = sum(scores) / len(scores) if scores else 0
             else:
                 avg_quality = 0
 
             # Last 24 hours
             yesterday = datetime.utcnow() - timedelta(days=1)
-            recent_count = db.query(CrawlResult).filter(
-                CrawlResult.created_at >= yesterday
-            ).count()
+            recent_count = db.query(CrawlResult).filter(CrawlResult.created_at >= yesterday).count()
 
             return {
                 "status": "healthy",
@@ -238,15 +236,13 @@ def get_article_metrics() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Article metrics check failed: {e}")
-        return {
-            "status": "degraded",
-            "error": str(e)
-        }
+        return {"status": "degraded", "error": str(e)}
 
 
 # ============================================================================
 # API Endpoints
 # ============================================================================
+
 
 @app.get("/", response_class=JSONResponse)
 async def root():
@@ -257,9 +253,9 @@ async def root():
         "endpoints": {
             "/health": "Health check (JSON)",
             "/metrics": "Prometheus metrics",
-            "/docs": "Swagger UI documentation"
+            "/docs": "Swagger UI documentation",
         },
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
 
@@ -332,58 +328,58 @@ async def prometheus_metrics():
         metrics = []
 
         # Articles
-        metrics.append(f'# HELP crawlagent_articles_total Total number of articles collected')
-        metrics.append(f'# TYPE crawlagent_articles_total gauge')
+        metrics.append(f"# HELP crawlagent_articles_total Total number of articles collected")
+        metrics.append(f"# TYPE crawlagent_articles_total gauge")
         metrics.append(f'crawlagent_articles_total {article_metrics.get("total_articles", 0)}')
 
-        metrics.append(f'# HELP crawlagent_articles_24h Articles collected in last 24 hours')
-        metrics.append(f'# TYPE crawlagent_articles_24h gauge')
+        metrics.append(f"# HELP crawlagent_articles_24h Articles collected in last 24 hours")
+        metrics.append(f"# TYPE crawlagent_articles_24h gauge")
         metrics.append(f'crawlagent_articles_24h {article_metrics.get("last_24h_count", 0)}')
 
         # Quality
-        metrics.append(f'# HELP crawlagent_quality_avg Average article quality score')
-        metrics.append(f'# TYPE crawlagent_quality_avg gauge')
+        metrics.append(f"# HELP crawlagent_quality_avg Average article quality score")
+        metrics.append(f"# TYPE crawlagent_quality_avg gauge")
         metrics.append(f'crawlagent_quality_avg {article_metrics.get("avg_quality_score", 0)}')
 
         # Costs
-        metrics.append(f'# HELP crawlagent_cost_total_usd Total LLM API cost (USD)')
-        metrics.append(f'# TYPE crawlagent_cost_total_usd gauge')
+        metrics.append(f"# HELP crawlagent_cost_total_usd Total LLM API cost (USD)")
+        metrics.append(f"# TYPE crawlagent_cost_total_usd gauge")
         metrics.append(f'crawlagent_cost_total_usd {cost_metrics.get("total_cost_usd", 0)}')
 
-        metrics.append(f'# HELP crawlagent_cost_today_usd Today\'s LLM API cost (USD)')
-        metrics.append(f'# TYPE crawlagent_cost_today_usd gauge')
+        metrics.append(f"# HELP crawlagent_cost_today_usd Today's LLM API cost (USD)")
+        metrics.append(f"# TYPE crawlagent_cost_today_usd gauge")
         metrics.append(f'crawlagent_cost_today_usd {cost_metrics.get("today_cost_usd", 0)}')
 
-        metrics.append(f'# HELP crawlagent_tokens_total Total tokens used')
-        metrics.append(f'# TYPE crawlagent_tokens_total gauge')
+        metrics.append(f"# HELP crawlagent_tokens_total Total tokens used")
+        metrics.append(f"# TYPE crawlagent_tokens_total gauge")
         metrics.append(f'crawlagent_tokens_total {cost_metrics.get("total_tokens", 0)}')
 
         # Database
         if db_health["connection_pool"]:
             pool = db_health["connection_pool"]
-            metrics.append(f'# HELP crawlagent_db_connections Database connections in use')
-            metrics.append(f'# TYPE crawlagent_db_connections gauge')
+            metrics.append(f"# HELP crawlagent_db_connections Database connections in use")
+            metrics.append(f"# TYPE crawlagent_db_connections gauge")
             metrics.append(f'crawlagent_db_connections {pool["checked_out"]}')
 
-            metrics.append(f'# HELP crawlagent_db_pool_size Database connection pool size')
-            metrics.append(f'# TYPE crawlagent_db_pool_size gauge')
+            metrics.append(f"# HELP crawlagent_db_pool_size Database connection pool size")
+            metrics.append(f"# TYPE crawlagent_db_pool_size gauge")
             metrics.append(f'crawlagent_db_pool_size {pool["size"]}')
 
         # System
-        metrics.append(f'# HELP crawlagent_cpu_percent CPU usage percentage')
-        metrics.append(f'# TYPE crawlagent_cpu_percent gauge')
+        metrics.append(f"# HELP crawlagent_cpu_percent CPU usage percentage")
+        metrics.append(f"# TYPE crawlagent_cpu_percent gauge")
         metrics.append(f'crawlagent_cpu_percent {system_health.get("cpu_percent", 0)}')
 
-        metrics.append(f'# HELP crawlagent_memory_percent Memory usage percentage')
-        metrics.append(f'# TYPE crawlagent_memory_percent gauge')
+        metrics.append(f"# HELP crawlagent_memory_percent Memory usage percentage")
+        metrics.append(f"# TYPE crawlagent_memory_percent gauge")
         metrics.append(f'crawlagent_memory_percent {system_health.get("memory_percent", 0)}')
 
         # Uptime
-        metrics.append(f'# HELP crawlagent_uptime_seconds Service uptime in seconds')
-        metrics.append(f'# TYPE crawlagent_uptime_seconds gauge')
-        metrics.append(f'crawlagent_uptime_seconds {get_uptime_seconds():.0f}')
+        metrics.append(f"# HELP crawlagent_uptime_seconds Service uptime in seconds")
+        metrics.append(f"# TYPE crawlagent_uptime_seconds gauge")
+        metrics.append(f"crawlagent_uptime_seconds {get_uptime_seconds():.0f}")
 
-        return PlainTextResponse(content='\n'.join(metrics) + '\n')
+        return PlainTextResponse(content="\n".join(metrics) + "\n")
 
     except Exception as e:
         logger.error(f"Prometheus metrics failed: {e}")
@@ -412,9 +408,4 @@ if __name__ == "__main__":
     logger.info("  - http://localhost:8000/docs (Swagger UI)")
     logger.info("=" * 60)
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

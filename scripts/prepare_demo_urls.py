@@ -12,16 +12,13 @@ DEMO_URLS = {
     "cnn": [
         "https://www.cnn.com/2024/11/12/business/apple-warning-iphone-users/index.html",
         "https://www.cnn.com/2024/11/11/tech/ai-chatbot-teenagers/index.html",
-        "https://edition.cnn.com/2024/11/12/business/markets-now/index.html"
+        "https://edition.cnn.com/2024/11/12/business/markets-now/index.html",
     ],
     "chosun": [
         "https://www.chosun.com/economy/economy_general/2024/11/12/",
-        "https://www.chosun.com/politics/politics_general/2024/11/12/"
+        "https://www.chosun.com/politics/politics_general/2024/11/12/",
     ],
-    "reuters": [
-        "https://www.reuters.com/technology/",
-        "https://www.reuters.com/business/"
-    ]
+    "reuters": ["https://www.reuters.com/technology/", "https://www.reuters.com/business/"],
 }
 
 
@@ -30,31 +27,27 @@ def check_url(url: str, timeout: int = 10) -> dict:
     URL 접근 가능 여부 확인
     """
     try:
-        response = requests.get(url, timeout=timeout, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        response = requests.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
 
         return {
             "url": url,
             "status": response.status_code,
             "accessible": response.status_code == 200,
             "size": len(response.text),
-            "error": None
+            "error": None,
         }
     except Exception as e:
-        return {
-            "url": url,
-            "status": None,
-            "accessible": False,
-            "size": 0,
-            "error": str(e)
-        }
+        return {"url": url, "status": None, "accessible": False, "size": 0, "error": str(e)}
 
 
 def main():
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🔍 데모 URL 검증")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     valid_urls = {}
 
@@ -74,9 +67,9 @@ def main():
                 logger.error(f"     Error: {result['error'] or result['status']}")
 
     # 최종 추천 URL
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("📝 데모 추천 URL")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     for site_name, urls in valid_urls.items():
         if urls:
@@ -84,9 +77,9 @@ def main():
         else:
             print(f"{site_name.upper()}: ⚠️  No valid URL found")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("💡 Tip: 데모 직전에 다시 실행해서 URL 유효성 확인하세요!")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":

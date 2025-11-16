@@ -18,12 +18,12 @@ import sys
 from datetime import datetime
 
 # 프로젝트 root 추가
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from loguru import logger
 
 from src.storage.database import get_db
 from src.storage.models import Selector
-from loguru import logger
-
 
 # 검증된 Selector 데이터
 DEMO_SELECTORS = [
@@ -35,7 +35,7 @@ DEMO_SELECTORS = [
         "date_selector": "p.update-time",
         "success_count": 15,
         "failure_count": 0,
-        "notes": "연합뉴스 - 한국 대표 통신사"
+        "notes": "연합뉴스 - 한국 대표 통신사",
     },
     {
         "site_name": "bbc",
@@ -45,7 +45,7 @@ DEMO_SELECTORS = [
         "date_selector": "time",
         "success_count": 12,
         "failure_count": 1,
-        "notes": "BBC News - 영국 공영방송"
+        "notes": "BBC News - 영국 공영방송",
     },
     {
         "site_name": "naver_news",
@@ -55,7 +55,7 @@ DEMO_SELECTORS = [
         "date_selector": "span.media_end_head_info_datestamp_time",
         "success_count": 20,
         "failure_count": 0,
-        "notes": "네이버뉴스 - 한국 최대 뉴스 포털"
+        "notes": "네이버뉴스 - 한국 최대 뉴스 포털",
     },
     {
         "site_name": "reuters",
@@ -65,7 +65,7 @@ DEMO_SELECTORS = [
         "date_selector": "time",
         "success_count": 8,
         "failure_count": 2,
-        "notes": "Reuters - 국제 통신사"
+        "notes": "Reuters - 국제 통신사",
     },
     {
         "site_name": "hankyung",
@@ -75,8 +75,8 @@ DEMO_SELECTORS = [
         "date_selector": "span.date-time",
         "success_count": 10,
         "failure_count": 1,
-        "notes": "한국경제 - 경제 전문 언론"
-    }
+        "notes": "한국경제 - 경제 전문 언론",
+    },
 ]
 
 
@@ -109,7 +109,7 @@ def seed_demo_selectors():
                 failure_count=selector_data["failure_count"],
                 site_type="ssr",
                 created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                updated_at=datetime.utcnow(),
             )
 
             db.add(new_selector)
@@ -139,7 +139,7 @@ def verify_few_shot_retrieval():
     logger.info("\n🔍 Verifying Few-Shot Retriever...")
 
     try:
-        from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+        from src.agents.few_shot_retriever import format_few_shot_prompt, get_few_shot_examples
 
         examples = get_few_shot_examples(limit=5)
 
@@ -164,9 +164,9 @@ def verify_few_shot_retrieval():
 
 
 if __name__ == "__main__":
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🌱 Demo Data Seeding Script")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # 1. Seed demo data
     if seed_demo_selectors():
@@ -175,9 +175,9 @@ if __name__ == "__main__":
         # 2. Verify Few-Shot retrieval
         if verify_few_shot_retrieval():
             print("\n✅ Step 2: Few-Shot retriever working correctly")
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("🎉 All checks passed! Ready for demo")
-            print("="*80)
+            print("=" * 80)
         else:
             print("\n❌ Step 2 failed: Few-Shot retriever not working")
     else:

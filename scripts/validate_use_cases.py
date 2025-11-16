@@ -15,22 +15,22 @@ Features:
     - Markdown 보고서 생성 (성공률, 소요 시간, Consensus Score 분포)
 """
 
-import sys
 import argparse
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any
+import sys
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.workflow.master_crawl_workflow import build_master_graph, MasterCrawlState
-from src.storage.database import get_db
-from src.storage.models import Selector
 import requests
 
+from src.storage.database import get_db
+from src.storage.models import Selector
+from src.workflow.master_crawl_workflow import MasterCrawlState, build_master_graph
 
 # ============================================================================
 # Test URLs
@@ -40,20 +40,17 @@ UC1_TEST_URLS = [
     # 연합뉴스 (기존 사이트)
     "https://www.yna.co.kr/view/AKR20250113000100051",
     "https://www.yna.co.kr/view/AKR20250113000200051",
-
     # BBC (기존 사이트)
     "https://www.bbc.com/news/world-asia-12345678",
     "https://www.bbc.com/news/technology-87654321",
-
     # 네이버뉴스 (기존 사이트)
     "https://news.naver.com/main/read.naver?mode=LSD&mid=sec&sid1=001&oid=001&aid=0014912345",
     "https://news.naver.com/main/read.naver?mode=LSD&mid=sec&sid1=001&oid=001&aid=0014912346",
-
     # 추가 테스트 URL (필요 시)
     "https://example.com/article1",
     "https://example.com/article2",
     "https://example.com/article3",
-    "https://example.com/article4"
+    "https://example.com/article4",
 ]
 
 UC3_TEST_URLS = [
@@ -62,13 +59,14 @@ UC3_TEST_URLS = [
     "https://apnews.com/article/example-12345",
     "https://www.chosun.com/national/2025/01/13/example/",
     "https://www.joongang.co.kr/article/25231234",
-    "https://www.npr.org/2025/01/13/1234567890/example-story"
+    "https://www.npr.org/2025/01/13/1234567890/example-story",
 ]
 
 
 # ============================================================================
 # Validation Functions
 # ============================================================================
+
 
 def validate_uc1(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
     """
@@ -94,13 +92,18 @@ def validate_uc1(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
 
         try:
             # Fetch HTML
-            response = requests.get(url, timeout=10, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            })
+            response = requests.get(
+                url,
+                timeout=10,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                },
+            )
             html_content = response.text
 
             # Extract site name
             from urllib.parse import urlparse
+
             parsed = urlparse(url)
             site_name = parsed.netloc.replace("www.", "").split(".")[0]
 
@@ -118,7 +121,7 @@ def validate_uc1(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
                 "uc3_discovery_result": None,
                 "final_result": None,
                 "error_message": None,
-                "workflow_history": []
+                "workflow_history": [],
             }
 
             final_state = master_app.invoke(initial_state)
@@ -126,38 +129,50 @@ def validate_uc1(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
 
             # Analyze result
             success = final_state.get("final_result") is not None
-            quality_score = final_state.get("uc1_validation_result", {}).get("quality_score", 0) if final_state.get("uc1_validation_result") else 0
+            quality_score = (
+                final_state.get("uc1_validation_result", {}).get("quality_score", 0)
+                if final_state.get("uc1_validation_result")
+                else 0
+            )
             workflow = " → ".join(final_state.get("workflow_history", []))
 
-            results.append({
-                "url": url,
-                "site": site_name,
-                "success": success,
-                "quality_score": quality_score,
-                "elapsed_time": elapsed,
-                "workflow": workflow
-            })
+            results.append(
+                {
+                    "url": url,
+                    "site": site_name,
+                    "success": success,
+                    "quality_score": quality_score,
+                    "elapsed_time": elapsed,
+                    "workflow": workflow,
+                }
+            )
 
             status = "✅ PASS" if success else "❌ FAIL"
             print(f"  {status} | Quality: {quality_score}/100 | Time: {elapsed:.2f}s")
 
         except Exception as e:
             print(f"  ❌ ERROR: {str(e)}")
-            results.append({
-                "url": url,
-                "site": "unknown",
-                "success": False,
-                "quality_score": 0,
-                "elapsed_time": 0,
-                "workflow": "error",
-                "error": str(e)
-            })
+            results.append(
+                {
+                    "url": url,
+                    "site": "unknown",
+                    "success": False,
+                    "quality_score": 0,
+                    "elapsed_time": 0,
+                    "workflow": "error",
+                    "error": str(e),
+                }
+            )
 
     # Calculate metrics
     success_count = sum(1 for r in results if r["success"])
     success_rate = (success_count / len(results)) * 100 if results else 0
     avg_time = sum(r["elapsed_time"] for r in results) / len(results) if results else 0
-    avg_quality = sum(r["quality_score"] for r in results if r["success"]) / success_count if success_count > 0 else 0
+    avg_quality = (
+        sum(r["quality_score"] for r in results if r["success"]) / success_count
+        if success_count > 0
+        else 0
+    )
 
     summary = {
         "total_tests": len(results),
@@ -165,7 +180,7 @@ def validate_uc1(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
         "success_rate": success_rate,
         "avg_time": avg_time,
         "avg_quality": avg_quality,
-        "results": results
+        "results": results,
     }
 
     print(f"\n📊 UC1 Summary:")
@@ -200,13 +215,18 @@ def validate_uc3(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
 
         try:
             # Fetch HTML
-            response = requests.get(url, timeout=10, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            })
+            response = requests.get(
+                url,
+                timeout=10,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                },
+            )
             html_content = response.text
 
             # Extract site name
             from urllib.parse import urlparse
+
             parsed = urlparse(url)
             site_name = parsed.netloc.replace("www.", "").split(".")[0]
 
@@ -224,7 +244,7 @@ def validate_uc3(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
                 "uc3_discovery_result": None,
                 "final_result": None,
                 "error_message": None,
-                "workflow_history": []
+                "workflow_history": [],
             }
 
             final_state = master_app.invoke(initial_state)
@@ -236,29 +256,33 @@ def validate_uc3(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
             consensus_score = uc3_result.get("consensus_score", 0.0) if uc3_result else 0.0
             workflow = " → ".join(final_state.get("workflow_history", []))
 
-            results.append({
-                "url": url,
-                "site": site_name,
-                "success": success,
-                "consensus_score": consensus_score,
-                "elapsed_time": elapsed,
-                "workflow": workflow
-            })
+            results.append(
+                {
+                    "url": url,
+                    "site": site_name,
+                    "success": success,
+                    "consensus_score": consensus_score,
+                    "elapsed_time": elapsed,
+                    "workflow": workflow,
+                }
+            )
 
             status = "✅ PASS" if success else "❌ FAIL"
             print(f"  {status} | Consensus: {consensus_score:.3f} | Time: {elapsed:.2f}s")
 
         except Exception as e:
             print(f"  ❌ ERROR: {str(e)}")
-            results.append({
-                "url": url,
-                "site": "unknown",
-                "success": False,
-                "consensus_score": 0.0,
-                "elapsed_time": 0,
-                "workflow": "error",
-                "error": str(e)
-            })
+            results.append(
+                {
+                    "url": url,
+                    "site": "unknown",
+                    "success": False,
+                    "consensus_score": 0.0,
+                    "elapsed_time": 0,
+                    "workflow": "error",
+                    "error": str(e),
+                }
+            )
 
     # Calculate metrics
     success_count = sum(1 for r in results if r["success"])
@@ -272,7 +296,7 @@ def validate_uc3(test_urls: List[str], output_file: Path) -> Dict[str, Any]:
         "success_rate": success_rate,
         "avg_time": avg_time,
         "avg_consensus": avg_consensus,
-        "results": results
+        "results": results,
     }
 
     print(f"\n📊 UC3 Summary:")
@@ -328,12 +352,12 @@ def generate_markdown_report(uc1_summary: Dict, uc3_summary: Dict, output_file: 
 |---|------|---------|---------|------|----------|
 """
 
-    for idx, result in enumerate(uc1_summary['results'], 1):
-        status = "✅" if result['success'] else "❌"
-        site = result['site']
-        quality = result['quality_score']
+    for idx, result in enumerate(uc1_summary["results"], 1):
+        status = "✅" if result["success"] else "❌"
+        site = result["site"]
+        quality = result["quality_score"]
         time_str = f"{result['elapsed_time']:.2f}s"
-        workflow = result.get('workflow', 'N/A')
+        workflow = result.get("workflow", "N/A")
 
         report += f"| {idx} | {site} | {status} | {quality}/100 | {time_str} | {workflow} |\n"
 
@@ -354,12 +378,12 @@ def generate_markdown_report(uc1_summary: Dict, uc3_summary: Dict, output_file: 
 |---|------|---------|-----------|------|----------|
 """
 
-    for idx, result in enumerate(uc3_summary['results'], 1):
-        status = "✅" if result['success'] else "❌"
-        site = result['site']
+    for idx, result in enumerate(uc3_summary["results"], 1):
+        status = "✅" if result["success"] else "❌"
+        site = result["site"]
         consensus = f"{result['consensus_score']:.3f}"
         time_str = f"{result['elapsed_time']:.2f}s"
-        workflow = result.get('workflow', 'N/A')
+        workflow = result.get("workflow", "N/A")
 
         report += f"| {idx} | {site} | {status} | {consensus} | {time_str} | {workflow} |\n"
 
@@ -394,24 +418,17 @@ def generate_markdown_report(uc1_summary: Dict, uc3_summary: Dict, output_file: 
 # Main
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="CrawlAgent Use Case Validation")
     parser.add_argument(
         "--output",
         type=str,
         default="validation_report.md",
-        help="Output markdown report file (default: validation_report.md)"
+        help="Output markdown report file (default: validation_report.md)",
     )
-    parser.add_argument(
-        "--skip-uc1",
-        action="store_true",
-        help="Skip UC1 validation"
-    )
-    parser.add_argument(
-        "--skip-uc3",
-        action="store_true",
-        help="Skip UC3 validation"
-    )
+    parser.add_argument("--skip-uc1", action="store_true", help="Skip UC1 validation")
+    parser.add_argument("--skip-uc3", action="store_true", help="Skip UC3 validation")
 
     args = parser.parse_args()
     output_file = project_root / args.output
@@ -433,7 +450,7 @@ def main():
             "success_rate": 0,
             "avg_time": 0,
             "avg_quality": 0,
-            "results": []
+            "results": [],
         }
 
     # UC3 Validation
@@ -448,7 +465,7 @@ def main():
             "success_rate": 0,
             "avg_time": 0,
             "avg_consensus": 0,
-            "results": []
+            "results": [],
         }
 
     # Generate Report

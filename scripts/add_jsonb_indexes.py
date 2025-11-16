@@ -17,9 +17,10 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.storage.database import engine
 from loguru import logger
 from sqlalchemy import text
+
+from src.storage.database import engine
 
 
 def create_jsonb_indexes():
@@ -41,7 +42,9 @@ def create_jsonb_indexes():
 
             # 1. Check existing indexes
             logger.info("\n📋 Checking existing indexes...")
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT
                     schemaname,
                     tablename,
@@ -50,7 +53,9 @@ def create_jsonb_indexes():
                 FROM pg_indexes
                 WHERE tablename IN ('decision_logs', 'cost_metrics')
                 ORDER BY tablename, indexname;
-            """))
+            """
+                )
+            )
 
             existing_indexes = result.fetchall()
             logger.info(f"Found {len(existing_indexes)} existing indexes:")
@@ -61,10 +66,14 @@ def create_jsonb_indexes():
             logger.info("\n🔨 Creating GIN index on decision_logs.gpt_analysis...")
 
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE INDEX IF NOT EXISTS idx_decision_logs_gpt_analysis_gin
                     ON decision_logs USING GIN (gpt_analysis);
-                """))
+                """
+                    )
+                )
                 conn.commit()
                 logger.success("✅ GIN index created: idx_decision_logs_gpt_analysis_gin")
             except Exception as e:
@@ -76,15 +85,21 @@ def create_jsonb_indexes():
             logger.info("\n🔨 Creating GIN index on decision_logs.gemini_validation...")
 
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE INDEX IF NOT EXISTS idx_decision_logs_gemini_validation_gin
                     ON decision_logs USING GIN (gemini_validation);
-                """))
+                """
+                    )
+                )
                 conn.commit()
                 logger.success("✅ GIN index created: idx_decision_logs_gemini_validation_gin")
             except Exception as e:
                 if "already exists" in str(e):
-                    logger.warning("⚠️  Index already exists: idx_decision_logs_gemini_validation_gin")
+                    logger.warning(
+                        "⚠️  Index already exists: idx_decision_logs_gemini_validation_gin"
+                    )
                 else:
                     raise
 
@@ -92,10 +107,14 @@ def create_jsonb_indexes():
             logger.info("\n🔨 Creating GIN index on cost_metrics.extra_data...")
 
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE INDEX IF NOT EXISTS idx_cost_metrics_extra_data_gin
                     ON cost_metrics USING GIN (extra_data);
-                """))
+                """
+                    )
+                )
                 conn.commit()
                 logger.success("✅ GIN index created: idx_cost_metrics_extra_data_gin")
             except Exception as e:
@@ -106,7 +125,9 @@ def create_jsonb_indexes():
 
             # 4. Verify indexes were created
             logger.info("\n✅ Verifying indexes...")
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT
                     tablename,
                     indexname,
@@ -118,7 +139,9 @@ def create_jsonb_indexes():
                     'idx_cost_metrics_extra_data_gin'
                 )
                 ORDER BY tablename;
-            """))
+            """
+                )
+            )
 
             new_indexes = result.fetchall()
             if new_indexes:
@@ -133,7 +156,8 @@ def create_jsonb_indexes():
             logger.info("\n" + "=" * 60)
             logger.info("📚 JSONB Query Examples (Now Optimized with GIN)")
             logger.info("=" * 60)
-            logger.info("""
+            logger.info(
+                """
 Examples of queries that will benefit from these indexes:
 
 1. Containment queries (@>) - decision_logs:
@@ -166,7 +190,8 @@ Examples of queries that will benefit from these indexes:
 Performance Impact:
 - Before: Full table scan (SLOW)
 - After: GIN index scan (FAST - 10-100x faster for large tables)
-            """)
+            """
+            )
 
             logger.info("\n" + "=" * 60)
             logger.success("🎉 JSONB GIN Indexes Created Successfully!")
@@ -175,6 +200,7 @@ Performance Impact:
     except Exception as e:
         logger.error(f"❌ Failed to create indexes: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         raise
 
@@ -189,7 +215,9 @@ def analyze_index_usage():
 
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 SELECT
                     schemaname,
                     tablename,
@@ -200,13 +228,17 @@ def analyze_index_usage():
                 FROM pg_stat_user_indexes
                 WHERE tablename IN ('decision_logs', 'cost_metrics')
                 ORDER BY idx_scan DESC;
-            """))
+            """
+                )
+            )
 
             stats = result.fetchall()
             if stats:
                 logger.info("\nIndex usage statistics:")
                 for stat in stats:
-                    logger.info(f"  - {stat[2]} ({stat[1]}): {stat[3]} scans, {stat[4]} tuples read")
+                    logger.info(
+                        f"  - {stat[2]} ({stat[1]}): {stat[3]} scans, {stat[4]} tuples read"
+                    )
             else:
                 logger.info("No index usage statistics available yet (indexes just created)")
 

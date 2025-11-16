@@ -7,27 +7,28 @@ Created: 2025-11-12
 
 import os
 import sys
+
 import requests
-from loguru import logger
 from dotenv import load_dotenv
+from loguru import logger
 
 # .env 파일 먼저 로드 (import 전에!)
 load_dotenv(override=True)
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.workflow.uc3_new_site import create_uc3_agent, UC3State
 from src.storage.database import get_db
 from src.storage.models import Selector
+from src.workflow.uc3_new_site import UC3State, create_uc3_agent
 
 
 def test_cnn_discovery():
     """
     UC3 - CNN 신규 사이트 자동 발견 테스트
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🧪 Quick Demo Test: CNN Discovery (UC3)")
-    print("="*80)
+    print("=" * 80)
 
     url = "https://www.cnn.com/2024/11/08/tech/openai-chatgpt-search/index.html"
 
@@ -42,9 +43,11 @@ def test_cnn_discovery():
     # HTML 다운로드
     print(f"\n[1/4] Downloading HTML from CNN...")
     try:
-        response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        response = requests.get(
+            url,
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
         html_content = response.text
         print(f"  ✅ Downloaded {len(html_content):,} bytes")
     except Exception as e:
@@ -73,7 +76,7 @@ def test_cnn_discovery():
         "consensus_reached": False,
         "consensus_score": None,
         "final_selectors": None,
-        "error_message": None
+        "error_message": None,
     }
 
     # 실행
@@ -84,6 +87,7 @@ def test_cnn_discovery():
     except Exception as e:
         print(f"  ❌ Error running workflow: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -99,7 +103,9 @@ def test_cnn_discovery():
     if final_state.get("consensus_reached"):
         final_selectors = final_state.get("final_selectors", {})
         print(f"\n  ✅ Success! Selectors discovered:")
-        print(f"     Title: {final_selectors.get('title_selector') or final_selectors.get('title')}")
+        print(
+            f"     Title: {final_selectors.get('title_selector') or final_selectors.get('title')}"
+        )
         print(f"     Body:  {final_selectors.get('body_selector') or final_selectors.get('body')}")
         print(f"     Date:  {final_selectors.get('date_selector') or final_selectors.get('date')}")
 
@@ -125,14 +131,15 @@ if __name__ == "__main__":
     try:
         success = test_cnn_discovery()
         if success:
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("🎉 Demo test PASSED! Ready for live demo")
-            print("="*80)
+            print("=" * 80)
         else:
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("❌ Demo test FAILED - check logs above")
-            print("="*80)
+            print("=" * 80)
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
         import traceback
+
         traceback.print_exc()

@@ -1,11 +1,11 @@
 """
 CrawlAgent - UC2 HITL (Human-in-the-Loop) Workflow
 Created: 2025-11-05
-Updated: 2025-11-12 (Few-Shot Examples 추가)
+Updated: 2025-11-14 (Gemini → GPT-4o 변경, Gemini rate limit 대응)
 
 LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
 - GPT-4o-mini: CSS Selector 제안 (Proposer)
-- Gemini-2.0-flash: Selector 검증 (Validator)
+- GPT-4o: Selector 검증 (Validator) - 이전 Gemini, rate limit으로 변경
 - Human: 최종 승인/거부 (Decision Maker)
 
 용어:
@@ -24,10 +24,10 @@ UC2는 "Multi-Agent Consensus + HITL" 패턴을 사용합니다.
    - confidence score와 reasoning 포함
    - 출력: gpt_proposal 추가된 State
 
-2. Gemini Validate Node (gemini_validate_node):
+2. GPT-4o Validate Node (gemini_validate_node):
    - GPT 제안을 실제 HTML에 적용하여 테스트
    - BeautifulSoup으로 CSS Selector 추출 시도
-   - 추출 결과를 Gemini LLM에게 검증 요청
+   - 추출 결과를 GPT-4o LLM에게 검증 요청 (이전 Gemini)
    - 출력: gemini_validation 추가된 State
 
 3. 합의 메커니즘:
@@ -41,13 +41,14 @@ UC2는 "Multi-Agent Consensus + HITL" 패턴을 사용합니다.
    - 예: return {**state, "gpt_proposal": proposal}
 """
 
-from typing import TypedDict, Optional, Literal
-from typing_extensions import Annotated
+from typing import Literal, Optional, TypedDict
 
+from typing_extensions import Annotated
 
 # ============================================================================
 # State Definition (LangGraph 공식 용어)
 # ============================================================================
+
 
 class HITLState(TypedDict):
     """
@@ -117,6 +118,7 @@ class HITLState(TypedDict):
 
 import json
 import os
+
 from loguru import logger
 from openai import OpenAI
 
@@ -138,9 +140,10 @@ def gpt_propose_node(state: HITLState) -> HITLState:
     logger.info(f"[GPT Propose Node] Starting for {state['url']}")
 
     # Few-Shot Retriever import
-    from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
-    from src.exceptions import OpenAIAPIError, is_retryable_error, format_error_for_user
     import time
+
+    from src.agents.few_shot_retriever import format_few_shot_prompt, get_few_shot_examples
+    from src.exceptions import OpenAIAPIError, format_error_for_user, is_retryable_error
 
     # HTML 샘플 추출 (20000자로 증가)
     html_sample = state.get("html_content", "")[:20000]
@@ -183,10 +186,7 @@ Return ONLY a JSON object with this structure:
 """
 
     # OpenAI API keys (primary + backup)
-    api_keys = [
-        os.getenv("OPENAI_API_KEY"),
-        os.getenv("OPENAI_API_KEY_BACKUP_1")
-    ]
+    api_keys = [os.getenv("OPENAI_API_KEY"), os.getenv("OPENAI_API_KEY_BACKUP_1")]
     api_keys = [key for key in api_keys if key]  # None 제거
 
     # Retry logic with fallback
@@ -204,25 +204,26 @@ Return ONLY a JSON object with this structure:
                 response = client.chat.completions.create(
                     model="gpt-4o",  # v2.1: Upgraded from gpt-4o-mini
                     messages=[
-                        {"role": "system", "content": "You are a CSS selector expert. Always return valid JSON."},
-                        {"role": "user", "content": prompt}
+                        {
+                            "role": "system",
+                            "content": "You are a CSS selector expert. Always return valid JSON.",
+                        },
+                        {"role": "user", "content": prompt},
                     ],
                     temperature=0.3,
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"},
                 )
 
                 # 결과 파싱
                 proposal_text = response.choices[0].message.content
                 proposal = json.loads(proposal_text)
 
-                logger.info(f"[GPT Propose Node] ✅ Success (key={key_idx+1}, attempt={attempt+1}, confidence={proposal.get('confidence', 0)})")
+                logger.info(
+                    f"[GPT Propose Node] ✅ Success (key={key_idx+1}, attempt={attempt+1}, confidence={proposal.get('confidence', 0)})"
+                )
 
                 # State 업데이트 (불변성 유지)
-                return {
-                    **state,
-                    "gpt_proposal": proposal,
-                    "next_action": "validate"
-                }
+                return {**state, "gpt_proposal": proposal, "next_action": "validate"}
 
             except Exception as raw_error:
                 last_error = raw_error
@@ -230,30 +231,37 @@ Return ONLY a JSON object with this structure:
 
                 # Retry 가능한 오류인가? (429 Rate Limit, 503/504 Server Error)
                 if is_retryable_error(error) and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
-                    logger.warning(f"[GPT Propose Node] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries}): {error}")
+                    wait_time = (2**attempt) * 1  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        f"[GPT Propose Node] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries}): {error}"
+                    )
                     time.sleep(wait_time)
                     continue
                 else:
                     # 재시도 불가능하거나 마지막 시도 실패
-                    logger.error(f"[GPT Propose Node] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}")
+                    logger.error(
+                        f"[GPT Propose Node] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}"
+                    )
                     break  # 다음 API 키로
 
     # 모든 API 키와 재시도 실패
-    user_message = format_error_for_user(OpenAIAPIError.from_openai_error(last_error) if last_error else Exception("Unknown error"))
+    user_message = format_error_for_user(
+        OpenAIAPIError.from_openai_error(last_error) if last_error else Exception("Unknown error")
+    )
     logger.error(f"[GPT Propose Node] ❌ All API keys exhausted. Last error: {user_message}")
 
     return {
         **state,
         "gpt_proposal": None,
         "error_message": f"GPT proposal failed: {user_message}",
-        "next_action": "end"
+        "next_action": "end",
     }
 
 
 # ============================================================================
 # Helper Functions for Quality Assessment (NEW! - Sprint 1)
 # ============================================================================
+
 
 def calculate_extraction_quality(extracted_data: dict, extraction_success: dict) -> float:
     """
@@ -323,24 +331,23 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
         # 날짜 형식 검증 (간단한 휴리스틱)
         # "2025-11-09", "2025.11.09", "11/09/2025" 등
         import re
-        if re.search(r'\d{4}', date) and re.search(r'\d{1,2}', date):
+
+        if re.search(r"\d{4}", date) and re.search(r"\d{1,2}", date):
             date_quality = 1.0  # 연도와 숫자가 포함되어 있으면 OK
         else:
             date_quality = 0.5  # 날짜 같지만 확실하지 않음
 
     # 4. Valid fields 카운트 (v2.1: 부분 성공 처리용)
-    valid_fields = sum([
-        1 if title_quality >= 0.3 else 0,  # Title이 최소 기준 충족
-        1 if body_quality >= 0.3 else 0,   # Body가 최소 기준 충족
-        1 if date_quality >= 0.5 else 0    # Date가 최소 기준 충족
-    ])
+    valid_fields = sum(
+        [
+            1 if title_quality >= 0.3 else 0,  # Title이 최소 기준 충족
+            1 if body_quality >= 0.3 else 0,  # Body가 최소 기준 충족
+            1 if date_quality >= 0.5 else 0,  # Date가 최소 기준 충족
+        ]
+    )
 
     # 5. 가중치 합산
-    extraction_quality = (
-        title_quality * 0.3 +
-        body_quality * 0.5 +
-        date_quality * 0.2
-    )
+    extraction_quality = title_quality * 0.3 + body_quality * 0.5 + date_quality * 0.2
 
     # v2.1: 부분 성공 보너스 (2/3 필드 성공 시 +0.05)
     if valid_fields == 2:
@@ -357,9 +364,7 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
 
 
 def calculate_consensus_score(
-    gpt_confidence: float,
-    gemini_confidence: float,
-    extraction_quality: float
+    gpt_confidence: float, gemini_confidence: float, extraction_quality: float
 ) -> float:
     """
     3가지 요소를 가중치 합산하여 최종 합의 점수 계산
@@ -396,11 +401,7 @@ def calculate_consensus_score(
         >>> calculate_consensus_score(0.60, 0.50, 0.30)
         0.43  # Human Review (품질 낮음)
     """
-    consensus_score = (
-        gpt_confidence * 0.3 +
-        gemini_confidence * 0.3 +
-        extraction_quality * 0.4
-    )
+    consensus_score = gpt_confidence * 0.3 + gemini_confidence * 0.3 + extraction_quality * 0.4
 
     logger.info(
         f"[Consensus Score] GPT={gpt_confidence:.2f}(30%) + "
@@ -422,7 +423,8 @@ from bs4 import BeautifulSoup
 
 def gemini_validate_node(state: HITLState) -> HITLState:
     """
-    Gemini-2.0-flash가 GPT 제안을 검증하는 Node
+    GPT-4o가 GPT-4o-mini 제안을 검증하는 Node
+    (원래 Gemini였으나 rate limit으로 GPT-4o로 변경)
 
     LangGraph Node 규칙:
     1. 입력: state (HITLState) - gpt_proposal 포함
@@ -433,9 +435,9 @@ def gemini_validate_node(state: HITLState) -> HITLState:
     1. GPT가 제안한 CSS Selector를 실제 HTML에 적용
     2. 데이터 추출 성공 여부 확인
     3. 추출된 데이터의 품질 평가
-    4. Gemini LLM으로 최종 판단
+    4. GPT-4o LLM으로 최종 판단
     """
-    logger.info(f"[Gemini Validate Node] Starting validation for {state['url']}")
+    logger.info(f"[GPT-4o Validate Node] Starting validation for {state['url']}")
 
     try:
         # 1. GPT 제안 가져오기
@@ -445,7 +447,7 @@ def gemini_validate_node(state: HITLState) -> HITLState:
 
         # 2. CSS Selector로 실제 데이터 추출 시도
         html_content = state.get("html_content", "")
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
 
         extracted_data = {}
         extraction_success = {}
@@ -470,11 +472,16 @@ def gemini_validate_node(state: HITLState) -> HITLState:
                 extracted_data[field] = None
                 extraction_success[field] = False
 
-        # 3. Gemini에게 검증 요청
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        # gemini-2.5-pro: 유료 티어 최고 품질 모델 (더 정확한 검증)
-        # gemini-2.5-flash: 유료 티어 빠른 모델 (quota 제한 없음)
-        model = genai.GenerativeModel("gemini-2.5-pro")
+        # 3. GPT-4o에게 검증 요청 (Gemini rate limit 대응)
+        from langchain_openai import ChatOpenAI
+
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            raise ValueError("OPENAI_API_KEY not set")
+
+        gpt_validator = ChatOpenAI(
+            model="gpt-4o", temperature=0.2, api_key=openai_key, max_tokens=2048, timeout=30.0
+        )
 
         validation_prompt = f"""
 You are a web scraping validator. Evaluate the following CSS selector proposal.
@@ -511,17 +518,24 @@ Criteria:
 - feedback: explain validation result
 """
 
-        # Gemini 호출
-        response = model.generate_content(
-            validation_prompt,
-            generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
-        )
+        # GPT-4o 호출
+        response = gpt_validator.invoke([{"role": "user", "content": validation_prompt}])
 
-        validation = json.loads(response.text)
-        logger.info(f"[Gemini Validate Node] Validation: {validation.get('is_valid')} (confidence: {validation.get('confidence')})")
+        # JSON 파싱
+        try:
+            validation = json.loads(response.content)
+        except Exception as e:
+            import re
+
+            json_match = re.search(r"```json\n(.*?)\n```", response.content, re.DOTALL)
+            if json_match:
+                validation = json.loads(json_match.group(1))
+            else:
+                raise ValueError("Failed to parse GPT-4o JSON response")
+
+        logger.info(
+            f"[GPT-4o Validate Node] Validation: {validation.get('is_valid')} (confidence: {validation.get('confidence')})"
+        )
 
         # 4. 합의 여부 결정 (NEW! Weighted Consensus Algorithm - Sprint 1)
         # 기존: validation.get("is_valid") 단순 사용
@@ -534,9 +548,7 @@ Criteria:
         gpt_confidence = gpt_proposal.get("confidence", 0.0)
         gemini_confidence = validation.get("confidence", 0.0)
         consensus_score = calculate_consensus_score(
-            gpt_confidence,
-            gemini_confidence,
-            extraction_quality
+            gpt_confidence, gemini_confidence, extraction_quality
         )
 
         # 4-3. 합의 여부 판단 (3-tier system, 완화됨)
@@ -551,13 +563,17 @@ Criteria:
             )
         else:
             consensus_reached = False
-            logger.warning(f"[Consensus] ❌ REJECTED (score={consensus_score:.2f} < 0.5) - Human Review needed")
+            logger.warning(
+                f"[Consensus] ❌ REJECTED (score={consensus_score:.2f} < 0.5) - Human Review needed"
+            )
 
         # 5. next_action 결정
+        # FIX Bug #1: retry_count를 if 블록 밖에서 초기화
+        retry_count = state.get("retry_count", 0)
+
         if consensus_reached:
             next_action = "end"  # 합의 성공 → 종료
         else:
-            retry_count = state.get("retry_count", 0)
             if retry_count < 3:
                 next_action = "retry"  # 재시도
             else:
@@ -570,18 +586,20 @@ Criteria:
             "consensus_reached": consensus_reached,
             "retry_count": retry_count + (0 if consensus_reached else 1),
             "final_selectors": gpt_proposal if consensus_reached else None,
-            "next_action": next_action
+            "next_action": next_action,
         }
 
-    except Exception as gemini_error:
-        logger.error(f"[Gemini Validate Node] ❌ Gemini validation failed: {gemini_error}")
-        logger.warning("[Gemini Validate Node] 🔄 Falling back to GPT-4o-mini for validation")
+    except Exception as gpt_error:
+        logger.error(f"[GPT-4o Validate Node] ❌ GPT-4o validation failed: {gpt_error}")
+        logger.warning("[GPT-4o Validate Node] 🔄 Falling back to GPT-4o-mini for validation")
 
         # Fallback: GPT-4o-mini로 검증 시도
         try:
-            from langchain_openai import ChatOpenAI
-            from src.exceptions import OpenAIAPIError, format_error_for_user
             import time
+
+            from langchain_openai import ChatOpenAI
+
+            from src.exceptions import OpenAIAPIError, format_error_for_user
 
             # GPT 제안 가져오기
             gpt_proposal = state.get("gpt_proposal")
@@ -590,7 +608,7 @@ Criteria:
 
             # CSS Selector로 실제 데이터 추출 시도 (Gemini에서 했던 것과 동일)
             html_content = state.get("html_content", "")
-            soup = BeautifulSoup(html_content, 'html.parser')
+            soup = BeautifulSoup(html_content, "html.parser")
 
             extracted_data = {}
             extraction_success = {}
@@ -652,36 +670,40 @@ Criteria:
             # GPT-4o-mini 호출 (최대 2회 재시도)
             for attempt in range(2):
                 try:
-                    fallback_llm = ChatOpenAI(
-                        model="gpt-4o-mini",
-                        temperature=0.2,
-                        timeout=30.0
-                    )
+                    fallback_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, timeout=30.0)
                     response = fallback_llm.invoke([{"role": "user", "content": validation_prompt}])
                     fallback_output = json.loads(response.content)
 
-                    logger.info(f"[Fallback Validate] ✅ GPT-4o-mini validation succeeded (attempt {attempt+1})")
+                    logger.info(
+                        f"[Fallback Validate] ✅ GPT-4o-mini validation succeeded (attempt {attempt+1})"
+                    )
 
                     # Consensus 계산
-                    extraction_quality = calculate_extraction_quality(extracted_data, extraction_success)
+                    extraction_quality = calculate_extraction_quality(
+                        extracted_data, extraction_success
+                    )
                     gpt_confidence = gpt_proposal.get("confidence", 0.0)
                     gemini_confidence = fallback_output.get("confidence", 0.0)  # GPT-4o-mini가 대체
                     consensus_score = calculate_consensus_score(
-                        gpt_confidence,
-                        gemini_confidence,
-                        extraction_quality
+                        gpt_confidence, gemini_confidence, extraction_quality
                     )
 
                     # Consensus 판단
                     if consensus_score >= 0.7:
                         consensus_reached = True
-                        logger.info(f"[Consensus Fallback] ✅ AUTO-APPROVED (score={consensus_score:.2f})")
+                        logger.info(
+                            f"[Consensus Fallback] ✅ AUTO-APPROVED (score={consensus_score:.2f})"
+                        )
                     elif consensus_score >= 0.5:
                         consensus_reached = True
-                        logger.warning(f"[Consensus Fallback] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f})")
+                        logger.warning(
+                            f"[Consensus Fallback] ⚠️ CONDITIONAL APPROVAL (score={consensus_score:.2f})"
+                        )
                     else:
                         consensus_reached = False
-                        logger.warning(f"[Consensus Fallback] ❌ REJECTED (score={consensus_score:.2f})")
+                        logger.warning(
+                            f"[Consensus Fallback] ❌ REJECTED (score={consensus_score:.2f})"
+                        )
 
                     # next_action 결정
                     if consensus_reached:
@@ -700,40 +722,56 @@ Criteria:
                         "retry_count": retry_count + (0 if consensus_reached else 1),
                         "final_selectors": gpt_proposal if consensus_reached else None,
                         "next_action": next_action,
-                        "fallback_used": "gpt-4o-mini"  # 메타데이터
+                        "fallback_used": "gpt-4o-mini",  # 메타데이터
                     }
 
                 except Exception as retry_error:
                     if attempt < 1:  # 1회 더 시도
-                        wait_time = 2 ** attempt
-                        logger.warning(f"[Fallback Validate] ⚠️ Retry after {wait_time}s: {retry_error}")
+                        wait_time = 2**attempt
+                        logger.warning(
+                            f"[Fallback Validate] ⚠️ Retry after {wait_time}s: {retry_error}"
+                        )
                         time.sleep(wait_time)
                         continue
                     else:
-                        logger.error(f"[Fallback Validate] ❌ GPT-4o-mini also failed: {retry_error}")
+                        logger.error(
+                            f"[Fallback Validate] ❌ GPT-4o-mini also failed: {retry_error}"
+                        )
                         raise
 
         except Exception as fallback_error:
-            # Gemini와 GPT-4o-mini 모두 실패
-            logger.error(f"[Gemini Validate Node] ❌ Both Gemini and fallback failed")
-            logger.error(f"  - Gemini error: {gemini_error}")
+            # GPT-4o와 GPT-4o-mini 모두 실패
+            logger.error(f"[GPT-4o Validate Node] ❌ Both GPT-4o and fallback failed")
+            logger.error(f"  - GPT-4o error: {gpt_error}")
             logger.error(f"  - Fallback error: {fallback_error}")
 
-            from src.exceptions import format_error_for_user, GeminiAPIError
-            user_message = format_error_for_user(GeminiAPIError(str(gemini_error)))
+            from src.exceptions import OpenAIAPIError, format_error_for_user
+
+            user_message = format_error_for_user(OpenAIAPIError(str(gpt_error)))
+
+            # FIX Bug #2 & #3: None 대신 빈 validation dict 반환
+            retry_count = state.get("retry_count", 0)
 
             return {
                 **state,
                 "error_message": f"Validation failed: {user_message} (Fallback also failed)",
-                "gemini_validation": None,
+                "gemini_validation": {
+                    "is_valid": False,
+                    "confidence": 0.0,
+                    "feedback": "Both GPT-4o and GPT-4o-mini validation failed",
+                    "suggested_changes": {},
+                },  # 빈 dict 대신 유효한 validation object
                 "consensus_reached": False,
-                "next_action": "end"
+                "consensus_score": 0.0,
+                "retry_count": retry_count + 1,
+                "next_action": "human_review" if retry_count < 3 else "end",
             }
 
 
 # ============================================================================
 # Human Review Node (HITL)
 # ============================================================================
+
 
 def human_review_node(state: HITLState) -> HITLState:
     """
@@ -748,7 +786,9 @@ def human_review_node(state: HITLState) -> HITLState:
 
     PoC 핵심: 완전 자동화 - Agent가 자율적으로 결정, 사람 개입 없음
     """
-    logger.warning(f"[Auto-Decision Node] 3회 재시도 실패 → 이전 Selector 유지 (URL: {state['url']})")
+    logger.warning(
+        f"[Auto-Decision Node] 3회 재시도 실패 → 이전 Selector 유지 (URL: {state['url']})"
+    )
 
     gpt_proposal = state.get("gpt_proposal")
     gemini_validation = state.get("gemini_validation")
@@ -765,13 +805,14 @@ def human_review_node(state: HITLState) -> HITLState:
         "consensus_reached": False,  # 합의 실패 명시
         "final_selectors": None,  # Selector 업데이트 안 함
         "error_message": "3회 재시도 실패 - 이전 Selector 유지",
-        "next_action": "end"
+        "next_action": "end",
     }
 
 
 # ============================================================================
 # Routing Function (조건부 Edge를 위한 라우팅)
 # ============================================================================
+
 
 def route_after_validation(state: HITLState) -> str:
     """
@@ -793,7 +834,7 @@ def route_after_validation(state: HITLState) -> str:
 # StateGraph 구성
 # ============================================================================
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
 
 def build_uc2_graph():
@@ -841,10 +882,10 @@ def build_uc2_graph():
         "gemini_validate",
         route_after_validation,
         {
-            "end": END,                    # 합의 성공 → 종료
-            "retry": "gpt_propose",        # 재시도 → GPT 다시 실행
-            "human_review": "human_review" # HITL 발동
-        }
+            "end": END,  # 합의 성공 → 종료
+            "retry": "gpt_propose",  # 재시도 → GPT 다시 실행
+            "human_review": "human_review",  # HITL 발동
+        },
     )
 
     # Human Review → 종료 (항상)

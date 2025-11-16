@@ -15,8 +15,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.workflow.master_crawl_workflow import build_master_graph, MasterCrawlState
 from src.utils.site_detector import extract_site_id
+from src.workflow.master_crawl_workflow import MasterCrawlState, build_master_graph
 
 TEST_URL = "https://www.donga.com/news/Economy/article/all/20251113/132765807/1"
 

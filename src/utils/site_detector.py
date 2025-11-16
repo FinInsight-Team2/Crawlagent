@@ -11,8 +11,8 @@ URL에서 정규화된 site_id를 추출합니다.
 버전: v2.1
 """
 
-from urllib.parse import urlparse
 from typing import Dict, List
+from urllib.parse import urlparse
 
 # 도메인 매핑 규칙 (정확한 도메인 → 정규화된 site_id)
 SITE_MAPPINGS: Dict[str, str] = {
@@ -20,78 +20,56 @@ SITE_MAPPINGS: Dict[str, str] = {
     "news.jtbc.co.kr": "jtbc",
     "jtbc.co.kr": "jtbc",
     "www.jtbc.co.kr": "jtbc",
-
     "news.kbs.co.kr": "kbs",
     "kbs.co.kr": "kbs",
     "www.kbs.co.kr": "kbs",
-
     "news.sbs.co.kr": "sbs",
     "sbs.co.kr": "sbs",
     "www.sbs.co.kr": "sbs",
-
     "n.news.naver.com": "naver",
     "news.naver.com": "naver",
     "naver.com": "naver",
     "www.naver.com": "naver",
-
     "www.donga.com": "donga",
     "donga.com": "donga",
-
     "www.chosun.com": "chosun",
     "chosun.com": "chosun",
-
     "www.hankyung.com": "hankyung",
     "hankyung.com": "hankyung",
-
     "www.mk.co.kr": "mk",
     "mk.co.kr": "mk",
-
     "www.joongang.co.kr": "joongang",
     "joongang.co.kr": "joongang",
-
     "www.edaily.co.kr": "edaily",
     "edaily.co.kr": "edaily",
-
     "www.yna.co.kr": "yonhap",
     "yna.co.kr": "yonhap",
-
     "yonhapnewstv.co.kr": "yonhapnewstv",
     "www.yonhapnewstv.co.kr": "yonhapnewstv",
-
     # 해외 뉴스 사이트
     "edition.cnn.com": "cnn",
     "www.cnn.com": "cnn",
     "cnn.com": "cnn",
-
     "www.bbc.com": "bbc",
     "bbc.com": "bbc",
     "www.bbc.co.uk": "bbc",
     "bbc.co.uk": "bbc",
-
     "www.reuters.com": "reuters",
     "reuters.com": "reuters",
-
     "www.theguardian.com": "guardian",
     "theguardian.com": "guardian",
-
     "apnews.com": "apnews",
     "www.apnews.com": "apnews",
-
     "www.nytimes.com": "nytimes",
     "nytimes.com": "nytimes",
-
     "www.axios.com": "axios",
     "axios.com": "axios",
-
     "www.politico.com": "politico",
     "politico.com": "politico",
-
     "www.lemonde.fr": "lemonde",
     "lemonde.fr": "lemonde",
-
     "www.spiegel.de": "spiegel",
     "spiegel.de": "spiegel",
-
     "www.asahi.com": "asahi",
     "asahi.com": "asahi",
 }

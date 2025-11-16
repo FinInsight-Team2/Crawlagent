@@ -10,11 +10,12 @@ Categorizes failures into 5 main types:
 """
 
 from enum import Enum
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 
 class FailureCategory(Enum):
     """Failure categories for diagnosis"""
+
     HTTP_ERROR = "http_error"
     PARSING_ERROR = "parsing_error"
     CONSENSUS_FAILURE = "consensus_failure"
@@ -61,8 +62,14 @@ class ErrorClassifier:
 
         # Priority 2: LLM API Errors (critical for UC2/UC3)
         exception_str = str(exception).lower()
-        if any(keyword in exception_str for keyword in ["openai", "gemini", "anthropic", "api", "authentication"]):
-            if any(keyword in exception_str for keyword in ["401", "unauthorized", "invalid api key", "quota"]):
+        if any(
+            keyword in exception_str
+            for keyword in ["openai", "gemini", "anthropic", "api", "authentication"]
+        ):
+            if any(
+                keyword in exception_str
+                for keyword in ["401", "unauthorized", "invalid api key", "quota"]
+            ):
                 return FailureCategory.LLM_API_ERROR
 
         # Priority 3: Consensus Failures (UC2/UC3 specific)
@@ -94,7 +101,10 @@ class ErrorClassifier:
                     return FailureCategory.PARSING_ERROR
 
         # Fallback: Check exception message for parsing keywords
-        if any(keyword in exception_str for keyword in ["selector", "beautifulsoup", "trafilatura", "parse", "extract"]):
+        if any(
+            keyword in exception_str
+            for keyword in ["selector", "beautifulsoup", "trafilatura", "parse", "extract"]
+        ):
             return FailureCategory.PARSING_ERROR
 
         # Default: Unknown
@@ -121,7 +131,7 @@ class ErrorClassifier:
             FailureCategory.CONSENSUS_FAILURE: "Consensus 실패",
             FailureCategory.LLM_API_ERROR: "LLM API 오류",
             FailureCategory.QUALITY_FAILURE: "품질 검증 실패",
-            FailureCategory.UNKNOWN: "알 수 없는 오류"
+            FailureCategory.UNKNOWN: "알 수 없는 오류",
         }
         return display_names.get(category, "알 수 없는 오류")
 
@@ -146,6 +156,6 @@ class ErrorClassifier:
             FailureCategory.CONSENSUS_FAILURE: "🤖",
             FailureCategory.LLM_API_ERROR: "🔑",
             FailureCategory.QUALITY_FAILURE: "⭐",
-            FailureCategory.UNKNOWN: "❓"
+            FailureCategory.UNKNOWN: "❓",
         }
         return icons.get(category, "❓")

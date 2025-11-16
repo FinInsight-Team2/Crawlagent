@@ -6,16 +6,17 @@ Usage:
     poetry run python scripts/migrate_cost_metrics.py
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from loguru import logger
+
 from src.storage.database import engine
 from src.storage.models import Base, CostMetric
-from loguru import logger
 
 
 def create_cost_metrics_table():
@@ -28,10 +29,11 @@ def create_cost_metrics_table():
     try:
         # Check if table already exists
         from sqlalchemy import inspect
+
         inspector = inspect(engine)
         existing_tables = inspector.get_table_names()
 
-        if 'cost_metrics' in existing_tables:
+        if "cost_metrics" in existing_tables:
             logger.warning("⚠️  Table 'cost_metrics' already exists. Skipping creation.")
             logger.info("   If you need to recreate it, drop it first:")
             logger.info("   DROP TABLE cost_metrics CASCADE;")
@@ -68,21 +70,22 @@ def verify_table():
 
     try:
         from sqlalchemy import inspect, text
+
         inspector = inspect(engine)
 
         # Check table exists
-        if 'cost_metrics' not in inspector.get_table_names():
+        if "cost_metrics" not in inspector.get_table_names():
             logger.error("❌ Table 'cost_metrics' not found!")
             return False
 
         # Get columns
-        columns = inspector.get_columns('cost_metrics')
+        columns = inspector.get_columns("cost_metrics")
         logger.info(f"\n✅ Table 'cost_metrics' exists with {len(columns)} columns:")
         for col in columns:
             logger.info(f"   - {col['name']}: {col['type']}")
 
         # Get indexes
-        indexes = inspector.get_indexes('cost_metrics')
+        indexes = inspector.get_indexes("cost_metrics")
         logger.info(f"\n✅ Indexes ({len(indexes)}):")
         for idx in indexes:
             logger.info(f"   - {idx['name']}: {idx['column_names']}")
@@ -93,7 +96,9 @@ def verify_table():
         logger.info("=" * 60)
 
         with engine.connect() as conn:
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 INSERT INTO cost_metrics (
                     provider, model, use_case,
                     input_tokens, output_tokens, total_tokens,
@@ -106,7 +111,9 @@ def verify_table():
                     'test_site'
                 )
                 RETURNING id, provider, model, total_cost;
-            """))
+            """
+                )
+            )
             conn.commit()
 
             row = result.fetchone()

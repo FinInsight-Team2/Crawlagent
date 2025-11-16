@@ -5,23 +5,23 @@ Created: 2025-11-12
 용도: 데모 시연용 출력 스크립트
 """
 
-from src.agents.few_shot_retriever import get_few_shot_examples, format_few_shot_prompt
+from src.agents.few_shot_retriever import format_few_shot_prompt, get_few_shot_examples
 from src.storage.database import get_db
-from src.storage.models import Selector, CrawlResult
+from src.storage.models import CrawlResult, Selector
 
 
 def show_welcome():
     """
     데모 시작 인사
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🤖 CrawlAgent v2.0 - Self-Healing Multi-Agent Crawler")
-    print("="*80)
+    print("=" * 80)
     print("\n✨ Few-Shot Learning 기반 범용 크롤러")
     print("   - Multi-Agent Consensus (GPT + Gemini)")
     print("   - $0 External API Cost")
     print("   - 80% Accuracy (UC3)")
-    print("\n" + "="*80 + "\n")
+    print("\n" + "=" * 80 + "\n")
 
 
 def show_few_shot_examples():
@@ -45,7 +45,7 @@ def show_few_shot_examples():
         print(f"  Body:    {ex['body_selector']}")
         print(f"  Date:    {ex['date_selector']}")
 
-        pa = ex['pattern_analysis']
+        pa = ex["pattern_analysis"]
         print(f"  Pattern:")
         print(f"    - Title: {pa.get('title_pattern', 'N/A')}")
         print(f"    - Body:  {pa.get('body_pattern', 'N/A')}")
@@ -73,7 +73,9 @@ def show_db_status():
     print("-" * 55)
 
     for sel in selectors:
-        print(f"{sel.site_name:<15} {sel.success_count:<10} {sel.failure_count:<10} {str(sel.updated_at)[:19]:<20}")
+        print(
+            f"{sel.site_name:<15} {sel.success_count:<10} {sel.failure_count:<10} {str(sel.updated_at)[:19]:<20}"
+        )
 
     print(f"\n✅ Total: {len(selectors)} sites registered")
 
@@ -173,9 +175,9 @@ def show_conclusion():
     """
     데모 마무리
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("🎉 CrawlAgent v2.0 - Demo Complete!")
-    print("="*80)
+    print("=" * 80)
     print()
     print("Key Takeaways:")
     print("  ✅ Few-Shot Learning from DB patterns")
@@ -189,7 +191,7 @@ def show_conclusion():
     print("  📖 Demo Guide: DEMO_GUIDE.md")
     print()
     print("Questions? Let's discuss! 💬")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 def main():

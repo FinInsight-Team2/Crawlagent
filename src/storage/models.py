@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    TIMESTAMP,
     Boolean,
     CheckConstraint,
     Column,
@@ -21,7 +22,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    TIMESTAMP,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
@@ -119,10 +119,10 @@ class CrawlResult(Base):
     content_type = Column(
         String(20),
         CheckConstraint("content_type IN ('news', 'blog', 'community')"),
-        default='news',
+        default="news",
         nullable=False,
         index=True,
-        comment="콘텐츠 타입 (news/blog/community)"
+        comment="콘텐츠 타입 (news/blog/community)",
     )
     meta_data = Column(JSONB, nullable=True, comment="비정형 메타데이터 (조회수, 추천수 등)")
 
@@ -132,23 +132,23 @@ class CrawlResult(Base):
         CheckConstraint("url_category_confidence >= 0.0 AND url_category_confidence <= 1.0"),
         default=0.0,
         nullable=False,
-        comment="URL에서 추출한 카테고리 신뢰도 (0.0~1.0)"
+        comment="URL에서 추출한 카테고리 신뢰도 (0.0~1.0)",
     )
 
     validation_status = Column(
         String(20),
         CheckConstraint("validation_status IN ('pending', 'verified', 'rejected')"),
-        default='pending',
+        default="pending",
         nullable=False,
         index=True,
-        comment="검증 상태 (pending/verified/rejected)"
+        comment="검증 상태 (pending/verified/rejected)",
     )
     validation_method = Column(
         String(20),
         CheckConstraint("validation_method IN ('rule', 'llm', '2-agent')"),
-        default='llm',
+        default="llm",
         nullable=True,
-        comment="검증 방법 (rule/llm/2-agent)"
+        comment="검증 방법 (rule/llm/2-agent)",
     )
     llm_reasoning = Column(Text, nullable=True, comment="LLM 판단 근거")
 
@@ -224,7 +224,7 @@ class CostMetric(Base):
         String(20),
         CheckConstraint("provider IN ('openai', 'gemini', 'claude')"),
         nullable=False,
-        index=True
+        index=True,
     )
 
     # Model Name (gpt-4o-mini, gemini-2.5-pro, claude-3-5-sonnet)
@@ -235,7 +235,7 @@ class CostMetric(Base):
         String(10),
         CheckConstraint("use_case IN ('uc1', 'uc2', 'uc3', 'other')"),
         nullable=False,
-        index=True
+        index=True,
     )
 
     # Token Usage
@@ -254,7 +254,9 @@ class CostMetric(Base):
     workflow_run_id = Column(String(50), nullable=True, index=True)  # LangSmith run ID
 
     # Extra context (JSONB for flexible storage - 'metadata' is reserved in SQLAlchemy)
-    extra_data = Column(JSONB, nullable=True, comment="Additional context (prompt length, response time, etc.)")
+    extra_data = Column(
+        JSONB, nullable=True, comment="Additional context (prompt length, response time, etc.)"
+    )
 
     def __repr__(self) -> str:
         return (
