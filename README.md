@@ -104,47 +104,77 @@
 
 ### 필수 요구사항
 
+- **Docker Desktop** (4.0+) - **권장!** One-command 실행
+- API Keys: OpenAI, Anthropic (Claude)
+
+### ⭐ 방법 1: Docker Compose (권장 - 5분)
+
+**가장 빠르고 간단한 방법!**
+
+```bash
+# 1. 초기 설정 (.env 파일 생성)
+make setup
+
+# 2. .env 파일 편집 (API 키 입력)
+vim .env  # or open .env
+# Required:
+#   OPENAI_API_KEY=sk-proj-...
+#   ANTHROPIC_API_KEY=sk-ant-...
+
+# 3. 전체 시스템 시작 (PostgreSQL + UI + Scheduler)
+make start
+
+# 4. 브라우저에서 접속
+open http://localhost:7860
+```
+
+**That's it!** 🎉
+
+**유용한 명령어**:
+```bash
+make health     # 상태 확인
+make logs       # 로그 확인
+make logs-app   # UI 로그만
+make stop       # 중지
+make help       # 전체 명령어 목록
+```
+
+상세 가이드: [DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)
+
+---
+
+### 방법 2: Manual (개발자용)
+
+**개발 환경에서 직접 실행**
+
+**요구사항**:
 - Python 3.11+
 - Poetry 1.8+
 - PostgreSQL 16 (Docker)
-- API Keys: OpenAI, Google Gemini, Anthropic, Tavily, Firecrawl
-
-### 1. 환경 설정
 
 ```bash
-# 프로젝트 디렉토리로 이동
-cd /Users/charlee/Desktop/Intern/crawlagent
-
-# Poetry 의존성 설치
+# 1. Poetry 의존성 설치
 poetry install
 
-# .env 파일 생성 (.env.example 참고)
+# 2. .env 파일 생성
 cp .env.example .env
+vim .env  # API 키 입력
 
-# API 키 설정
-vim .env
-```
+# 3. PostgreSQL 실행 (Docker)
+docker-compose up -d postgres
 
-### 2. 데이터베이스 실행
+# 4. Gradio UI 실행
+poetry run python -m src.ui.app
 
-```bash
-# Docker Compose로 PostgreSQL 실행
-docker-compose up -d
-
-# DB 테이블 확인
-poetry run python scripts/view_db.py
-```
-
-### 3. Gradio UI 실행
-
-```bash
-# Gradio 웹 UI 실행
-poetry run python src/ui/app.py
+# 5. (Optional) Scheduler 실행
+poetry run python src/scheduler/daily_crawler.py
 ```
 
 → 브라우저에서 http://127.0.0.1:7860 열기
 
-### 4. LangGraph Studio 실행 (개발자용)
+---
+
+### 방법 3: LangGraph Studio (고급 개발자용)
 
 ```bash
 # LangGraph Studio 실행

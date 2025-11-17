@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS decision_logs (
     url TEXT NOT NULL,
     site_name VARCHAR(100) NOT NULL,
     gpt_analysis JSONB,
-    gemini_validation JSONB,
+    gpt4o_validation JSONB,
     consensus_reached BOOLEAN DEFAULT FALSE,
     retry_count INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_decision_logs_consensus ON decision_logs(consensu
 
 -- JSONB indexes for efficient querying
 CREATE INDEX IF NOT EXISTS idx_gpt_analysis ON decision_logs USING GIN (gpt_analysis);
-CREATE INDEX IF NOT EXISTS idx_gemini_validation ON decision_logs USING GIN (gemini_validation);
+CREATE INDEX IF NOT EXISTS idx_gpt4o_validation ON decision_logs USING GIN (gpt4o_validation);
 
 -- Initial selector data (optional - can be inserted manually)
 -- 2025-10-29 업데이트: 모든 사이트 SSR 검증 완료

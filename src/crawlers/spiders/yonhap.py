@@ -137,7 +137,7 @@ class YonhapSpider(scrapy.Spider):
                         url=url,
                         site_name="yonhap",
                         gpt_analysis=uc2_result.get("gpt_analysis", {}),
-                        gemini_validation=uc2_result.get("gemini_validation", {}),
+                        gpt4o_validation=uc2_result.get("gpt_validation", {}),
                         consensus_score=consensus_score,
                         consensus_reached=False,
                         retry_count=uc2_result.get("retry_count", 0),

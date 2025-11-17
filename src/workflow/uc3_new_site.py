@@ -210,9 +210,9 @@ class UC3State(TypedDict, total=False):
     gpt_confidence: float
     """GPT-4o의 전체 신뢰도 (0.0-1.0)"""
 
-    gemini_validation: dict
+    gpt4o_validation: dict
     """
-    Gemini Agent (Validator) 검증 결과
+    GPT-4o Agent (Validator) 검증 결과
     {
         "best_selectors": {
             "title": "...",
@@ -228,8 +228,8 @@ class UC3State(TypedDict, total=False):
     }
     """
 
-    gemini_confidence: float
-    """Gemini의 전체 신뢰도 (0.0-1.0)"""
+    gpt4o_confidence: float
+    """GPT-4o의 전체 신뢰도 (0.0-1.0)"""
 
     consensus_score: float
     """
@@ -634,20 +634,34 @@ Site Name: {site_name}
 HTML (preprocessed):
 {preprocessed_html[:10000]}
 
+**Selector Priority Guidelines**:
+- **FIRST PRIORITY**: Target visible HTML elements (h1, div, article, section, p, time)
+- **SECOND PRIORITY**: Use meta tags ONLY if visible elements are not reliable
+- **Goal**: Extract actual article content from DOM structure
+
 Tasks:
 1. Identify the article title CSS selector
-   - Usually: h1, h2, meta[property="og:title"], or specific class
-   - Prioritize semantic HTML tags
+   - **Priority Order**:
+     1. Visible heading tags: h1, h2, div.title, article > h1, header > h1
+     2. Meta tags (if needed): meta[property="og:title"]
+   - Prioritize semantic HTML tags when available
    - Avoid id-based selectors (prefer class or tag)
 
 2. Identify the article body CSS selector
-   - Usually: article > p, div.content p, or main p
+   - **Priority Order**:
+     1. Content containers: article > p, div.content p, section.article-body
+     2. Main content: main p, div.article-content
+     3. Avoid: meta[name="description"] (too short)
    - Should extract main text content (multiple paragraphs)
    - Avoid navigation, ads, related articles
 
 3. Identify the publication date selector
-   - Usually: time[datetime], meta[property="article:published_time"], or specific class
+   - **Priority Order**:
+     1. Time elements: time[datetime], time.published-date, span.date
+     2. Date containers: div.timestamp, span.article-date
+     3. Meta tags (acceptable): meta[property="article:published_time"]
    - Date format: ISO 8601 or Korean format (YYYY-MM-DD HH:MM:SS)
+   - **Note**: Meta tags for dates are acceptable (many sites use them)
 
 4. Determine if this is SSR (Server-Side Rendering) or SPA (Single Page App)
    - SSR: Full HTML content visible
@@ -663,7 +677,8 @@ Guidelines:
 - Prefer stable selectors (avoid auto-generated class names like 'css-1a2b3c')
 - Use descendant combinators (e.g., 'article > h1') for precision
 - Test selectors mentally against the HTML structure
-- Provide clear reasoning for your choices
+- Provide clear reasoning for your choices and priority level used
+- **Prefer visible elements, but meta tags are acceptable when necessary**
 
 Return structured output with:
 - site_name
@@ -1384,14 +1399,22 @@ Generate CSS selectors for title, body, and date based on the above information.
 
         response = claude_llm.invoke([{"role": "user", "content": prompt}])
 
+        # Extract text from response (handle both string and list formats)
+        if isinstance(response.content, list):
+            # New Anthropic API format: content is a list of blocks
+            proposal_text = response.content[0].get("text", "") if response.content else ""
+        else:
+            # Old format: content is already a string
+            proposal_text = response.content
+
         # JSON 파싱
         try:
-            claude_output = json.loads(response.content)
+            claude_output = json.loads(proposal_text)
         except Exception as e:
             # Fallback: extract JSON from markdown code block
             import re
 
-            json_match = re.search(r"```json\n(.*?)\n```", response.content, re.DOTALL)
+            json_match = re.search(r"```json\n(.*?)\n```", proposal_text, re.DOTALL)
             if json_match:
                 claude_output = json.loads(json_match.group(1))
             else:
@@ -1551,9 +1574,9 @@ def validate_selector_tool(selector: str, selector_type: str, html: str) -> dict
         return {"valid": False, "confidence": 0.0, "error": str(e)}
 
 
-def gemini_validate_agent_node(state: UC3State) -> dict:
+def gpt4o_validate_agent_node(state: UC3State) -> dict:
     """
-    Agent 2: Gemini Validator with Validation Tool
+    Agent 2: GPT-4o Validator with Validation Tool
 
     목적:
         GPT-4o의 제안을 실제 HTML에서 테스트하여 검증합니다.
@@ -1562,7 +1585,7 @@ def gemini_validate_agent_node(state: UC3State) -> dict:
         validate_selector_tool - 각 셀렉터를 실제 HTML에서 테스트
 
     출력:
-        gemini_validation: {
+        gpt4o_validation: {
             "best_selectors": {"title": "...", "body": "...", "date": "..."},
             "validation_details": {...},
             "overall_confidence": 0.95
@@ -1660,8 +1683,8 @@ Validation results (tested on actual HTML):
 
         return {
             **state,
-            "gemini_validation": gpt_output,  # Keep field name for backward compatibility
-            "gemini_confidence": overall_conf,  # Keep field name for backward compatibility
+            "gpt4o_validation": gpt_output,
+            "gpt4o_confidence": overall_conf,
         }
 
     except Exception as e:
@@ -1717,18 +1740,18 @@ Validation results (tested on actual HTML):
 
             return {
                 **state,
-                "gemini_validation": fallback_output,
-                "gemini_confidence": overall_conf,
+                "gpt4o_validation": fallback_output,
+                "gpt4o_confidence": overall_conf,
             }
 
         except Exception as fallback_error:
             logger.error(f"[UC3 Agent 2] Fallback also failed: {fallback_error}")
             return {
                 **state,
-                "gemini_validation": {
-                    "error": f"Gemini and fallback failed: {e}, {fallback_error}"
+                "gpt4o_validation": {
+                    "error": f"GPT-4o and fallback failed: {e}, {fallback_error}"
                 },
-                "gemini_confidence": 0.0,
+                "gpt4o_confidence": 0.0,
             }
 
 
@@ -1741,7 +1764,7 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
 
     공식:
         Consensus Score = 0.3 × GPT confidence
-                        + 0.3 × Gemini confidence
+                        + 0.3 × GPT-4o confidence
                         + 0.4 × Extraction quality
 
     Threshold:
@@ -1754,13 +1777,13 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
         discovered_selectors: dict (if consensus_reached)
     """
     gpt_conf = state.get("gpt_confidence", 0.0)
-    gemini_conf = state.get("gemini_confidence", 0.0)
-    gemini_validation = state.get("gemini_validation", {})
+    gpt4o_conf = state.get("gpt4o_confidence", 0.0)
+    gpt4o_validation = state.get("gpt4o_validation", {})
 
     logger.info("[UC3 Consensus] 가중 합의 계산 시작")
 
     # Extraction Quality 계산
-    validation_details = gemini_validation.get("validation_details", {})
+    validation_details = gpt4o_validation.get("validation_details", {})
 
     extraction_scores = []
     for selector_type in ["title", "body", "date"]:
@@ -1772,7 +1795,7 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
     )
 
     # 가중 합의 (UC2와 동일한 공식)
-    consensus_score = gpt_conf * 0.3 + gemini_conf * 0.3 + extraction_quality * 0.4
+    consensus_score = gpt_conf * 0.3 + gpt4o_conf * 0.3 + extraction_quality * 0.4
 
     # UC3 threshold: 0.50 (완화됨 - v2.1 개선, UC2와 동일)
     # 이전: 0.55 (CNN 0.58로 아슬아슬하게 통과)
@@ -1780,16 +1803,16 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
     consensus_reached = consensus_score >= 0.50
 
     logger.info(
-        f"[UC3 Consensus] GPT={gpt_conf:.2f}, Gemini={gemini_conf:.2f}, Extract={extraction_quality:.2f} → Score={consensus_score:.2f}"
+        f"[UC3 Consensus] GPT={gpt_conf:.2f}, GPT-4o={gpt4o_conf:.2f}, Extract={extraction_quality:.2f} → Score={consensus_score:.2f}"
     )
     logger.info(f"[UC3 Consensus] Threshold=0.50, Reached={consensus_reached}")
 
-    # Gemini best_selectors 또는 GPT proposal에서 추출
+    # GPT-4o best_selectors 또는 GPT proposal에서 추출
     best_selectors = None
     if consensus_reached:
-        best_selectors = gemini_validation.get("best_selectors")
+        best_selectors = gpt4o_validation.get("best_selectors")
 
-        # Fallback: Gemini가 best_selectors를 반환하지 않으면 GPT proposal 사용
+        # Fallback: GPT-4o가 best_selectors를 반환하지 않으면 GPT proposal 사용
         if not best_selectors:
             gpt_proposal = state.get("gpt_proposal", {})
             gpt_selectors = gpt_proposal.get("selectors", {})
@@ -1800,7 +1823,7 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
                     "date": gpt_selectors.get("date", {}).get("selector", ""),
                 }
                 logger.warning(
-                    f"[UC3 Consensus] Gemini didn't return best_selectors, using GPT proposal: {best_selectors}"
+                    f"[UC3 Consensus] GPT-4o didn't return best_selectors, using GPT proposal: {best_selectors}"
                 )
 
         # None 값을 빈 문자열로 변환 (DB NOT NULL 제약 조건 대응)
@@ -1863,7 +1886,7 @@ def create_uc3_agent():
     # graph.add_node("tavily_search", tavily_search_node)  # REMOVED - not needed
     graph.add_node("beautifulsoup_analyze", beautifulsoup_analyze_node)
     graph.add_node("gpt_discover_agent", gpt_discover_agent_node)
-    graph.add_node("gemini_validate_agent", gemini_validate_agent_node)
+    graph.add_node("gpt4o_validate_agent", gpt4o_validate_agent_node)
     graph.add_node("calculate_consensus", calculate_uc3_consensus_node)
     graph.add_node("save_selectors", save_selectors_node)
 
@@ -1874,8 +1897,8 @@ def create_uc3_agent():
     graph.add_edge("simple_preprocess", "beautifulsoup_analyze")
     # graph.add_edge("tavily_search", "beautifulsoup_analyze")  # REMOVED
     graph.add_edge("beautifulsoup_analyze", "gpt_discover_agent")
-    graph.add_edge("gpt_discover_agent", "gemini_validate_agent")
-    graph.add_edge("gemini_validate_agent", "calculate_consensus")
+    graph.add_edge("gpt_discover_agent", "gpt4o_validate_agent")
+    graph.add_edge("gpt4o_validate_agent", "calculate_consensus")
 
     # 조건부 엣지: consensus_reached에 따라 분기
     def route_after_consensus(state: UC3State):
@@ -1944,7 +1967,7 @@ if __name__ == "__main__":
     # Consensus 디버깅
     logger.info(f"\n=== Consensus Details ===")
     logger.info(f"GPT Confidence: {result.get('gpt_confidence', 0):.2f}")
-    logger.info(f"Gemini Confidence: {result.get('gemini_confidence', 0):.2f}")
+    logger.info(f"GPT-4o Confidence: {result.get('gpt4o_confidence', 0):.2f}")
     logger.info(f"Extraction Quality: {result.get('extraction_quality', 0):.2f}")
     logger.info(f"Consensus Score: {result.get('consensus_score', 0):.2f}")
     logger.info(f"Consensus Reached: {result.get('consensus_reached', False)}")

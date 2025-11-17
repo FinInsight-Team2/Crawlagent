@@ -179,9 +179,9 @@ class DecisionLog(Base):
     """
     2-Agent 합의 로그 테이블
 
-    GPT-4o와 Gemini 2.5의 분석 결과를 JSONB로 저장합니다.
-    - gpt_analysis: GPT-4o의 CSS Selector 제안 (JSONB)
-    - gemini_validation: Gemini 2.5의 검증 결과 (JSONB)
+    Claude Sonnet 4.5와 GPT-4o의 분석 결과를 JSONB로 저장합니다.
+    - gpt_analysis: Claude Sonnet 4.5의 CSS Selector 제안 (JSONB)
+    - gpt4o_validation: GPT-4o의 검증 결과 (JSONB)
     - consensus_reached: 합의 성공 여부
     """
 
@@ -191,7 +191,7 @@ class DecisionLog(Base):
     url = Column(Text, nullable=False, index=True)
     site_name = Column(String(100), nullable=False)
     gpt_analysis = Column(JSONB, nullable=True)  # GIN 인덱스 적용됨
-    gemini_validation = Column(JSONB, nullable=True)  # GIN 인덱스 적용됨
+    gpt4o_validation = Column(JSONB, nullable=True)  # GIN 인덱스 적용됨
     consensus_reached = Column(Boolean, default=False, nullable=False, index=True)
     retry_count = Column(Integer, default=0, nullable=False)
     created_at = Column(TIMESTAMP, default=datetime.utcnow, nullable=False)

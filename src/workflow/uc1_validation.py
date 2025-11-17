@@ -99,6 +99,9 @@ class ValidationState(TypedDict, total=False):
     uc2_triggered: bool
     uc2_success: bool
 
+    # Selector Health Check (NEW: UC2 트리거 개선)
+    selector_health: Optional[dict]  # {"title_valid": bool, "body_valid": bool, "date_valid": bool}
+
 
 # ============================================================
 # Step 2: Node 함수 정의 (작업 단위)
@@ -235,6 +238,35 @@ def decide_action(state: ValidationState) -> dict:
     quality_score = state["quality_score"]
     missing_fields = state.get("missing_fields", [])
     site_name = state["site_name"]
+    selector_health = state.get("selector_health", {})
+
+    # 0. Selector Health Check (NEW: UC2 트리거 개선)
+    # Selector가 2개 이상 손상되면 quality와 무관하게 UC2 트리거
+    damage_count = sum(1 for v in selector_health.values() if not v)
+    if damage_count >= 2:
+        logger.warning(
+            f"[UC1] ⚠️ Selector damaged ({damage_count}/3 invalid) "
+            f"→ Triggering UC2 Self-Healing (quality={quality_score})"
+        )
+        logger.info(
+            f"[UC1] Selector health: title_valid={selector_health.get('title_valid', False)}, "
+            f"body_valid={selector_health.get('body_valid', False)}, "
+            f"date_valid={selector_health.get('date_valid', False)}"
+        )
+
+        validation_result = {
+            "quality_passed": False,  # Selector 손상으로 인한 실패
+            "quality_score": quality_score,
+            "missing_fields": missing_fields,
+            "next_action": "heal",
+            "selector_damage_count": damage_count,
+        }
+
+        return {
+            "next_action": "heal",
+            "quality_passed": False,
+            "uc1_validation_result": validation_result,
+        }
 
     # 1. 품질 검증 통과 (정상)
     if quality_score >= 80:

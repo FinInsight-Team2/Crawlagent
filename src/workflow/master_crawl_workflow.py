@@ -163,7 +163,7 @@ class MasterCrawlState(TypedDict):
         "consensus_score": 0.85,
         "proposed_selectors": {...},
         "gpt_analysis": {...},
-        "gemini_validation": {...}
+        "gpt_validation": {...}
     }
     """
 
@@ -444,6 +444,12 @@ def supervisor_node(
             return Command(
                 update={
                     "next_action": "end",
+                    "final_result": {
+                        "title": title,
+                        "body": body,
+                        "date": date_str,
+                        "quality_score": quality_score,
+                    },
                     "workflow_history": history
                     + [f"supervisor → DB_SAVED → END (UC1 success, score={quality_score})"],
                 },
@@ -591,7 +597,7 @@ def supervisor_node(
                     url=state["url"],
                     site_name=state["site_name"],
                     gpt_analysis=uc2_result.get("gpt_analysis"),
-                    gemini_validation=uc2_result.get("gemini_validation"),
+                    gpt4o_validation=uc2_result.get("gpt_validation"),
                     consensus_reached=True,
                     retry_count=uc2_result.get("retry_count", 0),
                     created_at=datetime.utcnow(),
@@ -642,7 +648,7 @@ def supervisor_node(
                     url=state["url"],
                     site_name=state["site_name"],
                     gpt_analysis=uc2_result.get("gpt_analysis") if uc2_result else None,
-                    gemini_validation=uc2_result.get("gemini_validation") if uc2_result else None,
+                    gpt4o_validation=uc2_result.get("gpt_validation") if uc2_result else None,
                     consensus_reached=False,
                     retry_count=uc2_result.get("retry_count", 0) if uc2_result else 0,
                     created_at=datetime.utcnow(),
@@ -756,13 +762,18 @@ def supervisor_node(
             except Exception as e:
                 logger.error(f"[Supervisor] ❌ Failed to save UC3 Selector to DB: {e}")
 
+            # UC3 완료 후 UC1 재실행하여 데이터 수집
+            logger.info(
+                f"[Supervisor] 🔄 UC3 Discovery completed → Routing to UC1 for data collection"
+            )
             return Command(
                 update={
-                    "next_action": "end",
+                    "current_uc": "uc1",
+                    "failure_count": 0,  # Reset failure count
                     "workflow_history": history
-                    + [f"supervisor → SELECTOR_SAVED → END (UC3 success {confidence:.2f})"],
+                    + [f"supervisor → SELECTOR_SAVED → uc1_validation (UC3 success {confidence:.2f})"],
                 },
-                goto=END,
+                goto="uc1_validation",
             )
 
         # UC3 실패 → 종료
@@ -918,56 +929,104 @@ def uc1_validation_node(state: MasterCrawlState) -> Command[Literal["supervisor"
 
         soup = BeautifulSoup(html_content, "html.parser")
 
-        # Title 추출
+        # Selector Health Check: CSS Selector가 실제로 요소를 찾는지 검증
+        selector_health = {
+            "title_valid": False,
+            "body_valid": False,
+            "date_valid": False,
+        }
+
+        # Title 추출 + Health Check
         title = None
+        title_from_fallback = False
         if selector_record.title_selector:
             try:
                 title_elem = soup.select_one(selector_record.title_selector)
-                title = title_elem.get_text(strip=True) if title_elem else None
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                    selector_health["title_valid"] = True  # Selector 유효
+                else:
+                    logger.warning(f"[UC1 Node] Title selector found no elements: {selector_record.title_selector}")
             except Exception as e:
                 logger.warning(f"[UC1 Node] Title extraction failed: {e}")
 
-        # Fallback: meta tag
-        if not title:
+        # Fallback: meta tag (UC2 Demo Mode에서는 비활성화)
+        uc2_demo_mode = os.getenv("UC2_DEMO_MODE", "false").lower() == "true"
+        if not title and not uc2_demo_mode:
             meta_title = soup.select_one('meta[property="og:title"]')
             title = meta_title.get("content") if meta_title else None
+            if title:
+                title_from_fallback = True
+                logger.debug(f"[UC1 Node] Title fallback (meta tag) succeeded")
 
-        # Date 추출
+        # Date 추출 + Health Check
         date_str = None
+        date_from_fallback = False
         if selector_record.date_selector:
             try:
                 date_elem = soup.select_one(selector_record.date_selector)
-                date_str = date_elem.get_text(strip=True) if date_elem else None
+                if date_elem:
+                    date_str = date_elem.get_text(strip=True) if date_elem.name != "meta" else date_elem.get("content")
+                    # Meta 태그는 항상 유효하다고 간주 (fallback이 아님)
+                    if selector_record.date_selector.startswith("meta"):
+                        selector_health["date_valid"] = True
+                    else:
+                        selector_health["date_valid"] = True
+                else:
+                    logger.warning(f"[UC1 Node] Date selector found no elements: {selector_record.date_selector}")
             except Exception as e:
                 logger.warning(f"[UC1 Node] Date extraction failed: {e}")
 
-        # Fallback: meta tag
-        if not date_str:
+        # Fallback: meta tag (UC2 Demo Mode에서는 비활성화)
+        if not date_str and not uc2_demo_mode:
             meta_date = soup.select_one('meta[property="article:published_time"]')
             date_str = meta_date.get("content") if meta_date else None
+            if date_str:
+                date_from_fallback = True
+                logger.debug(f"[UC1 Node] Date fallback (meta tag) succeeded")
 
-        # Body 추출 (Trafilatura 우선)
-        body = trafilatura.extract(
-            html_content,
-            include_comments=False,
-            include_tables=False,
-            no_fallback=False,
-            favor_precision=True,
-            favor_recall=False,
-        )
+        # Body 추출 + Health Check
+        body = None
+        body_from_fallback = False
 
-        # Fallback: CSS Selector
-        if not body or len(body) < 100:
-            if selector_record.body_selector:
-                try:
-                    body_elements = soup.select(selector_record.body_selector)
+        # 먼저 CSS Selector 시도 (Health Check용)
+        if selector_record.body_selector:
+            try:
+                body_elements = soup.select(selector_record.body_selector)
+                if body_elements:
                     body = " ".join([elem.get_text(strip=True) for elem in body_elements])
-                except Exception as e:
-                    logger.warning(f"[UC1 Node] Body extraction failed: {e}")
-                    body = ""
+                    if len(body) >= 100:
+                        selector_health["body_valid"] = True  # Selector 유효
+                    else:
+                        logger.warning(f"[UC1 Node] Body selector found elements but text too short: {len(body)} chars")
+                else:
+                    logger.warning(f"[UC1 Node] Body selector found no elements: {selector_record.body_selector}")
+            except Exception as e:
+                logger.warning(f"[UC1 Node] Body extraction failed: {e}")
 
+        # Fallback: Trafilatura (UC2 Demo Mode에서는 비활성화)
+        if (not body or len(body) < 100) and not uc2_demo_mode:
+            body = trafilatura.extract(
+                html_content,
+                include_comments=False,
+                include_tables=False,
+                no_fallback=False,
+                favor_precision=True,
+                favor_recall=False,
+            )
+            if body and len(body) >= 100:
+                body_from_fallback = True
+                logger.debug(f"[UC1 Node] Body fallback (Trafilatura) succeeded: {len(body)} chars")
+
+        # Selector Health 로깅
+        damage_count = sum(1 for v in selector_health.values() if not v)
         logger.info(
             f"[UC1 Node] Extracted: title={bool(title)}, body_len={len(body) if body else 0}, date={bool(date_str)}"
+        )
+        logger.info(
+            f"[UC1 Node] Selector Health: title_valid={selector_health['title_valid']}, "
+            f"body_valid={selector_health['body_valid']}, date_valid={selector_health['date_valid']} "
+            f"(damage_count={damage_count}/3)"
         )
 
         # 2. UC1 Graph 빌드
@@ -985,6 +1044,7 @@ def uc1_validation_node(state: MasterCrawlState) -> Command[Literal["supervisor"
             "next_action": "save",
             "uc2_triggered": False,
             "uc2_success": False,
+            "selector_health": selector_health,  # Selector 유효성 정보 전달
         }
 
         # 4. UC1 워크플로우 실행
@@ -1086,7 +1146,7 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
             "site_name": state["site_name"],
             "html_content": state.get("html_content"),
             "gpt_proposal": None,
-            "gemini_validation": None,
+            "gpt_validation": None,
             "consensus_reached": False,
             "retry_count": 0,
             "final_selectors": None,
@@ -1107,15 +1167,15 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
 
         # 합의 점수 계산 (UC2에서 계산한 값 사용)
         gpt_proposal = uc2_result.get("gpt_proposal", {})
-        gemini_validation = uc2_result.get("gemini_validation", {})
+        gpt_validation = uc2_result.get("gpt_validation", {})
 
         gpt_confidence = gpt_proposal.get("confidence", 0.0) if gpt_proposal else 0.0
-        gemini_confidence = gemini_validation.get("confidence", 0.0) if gemini_validation else 0.0
+        gpt4o_confidence = gpt_validation.get("confidence", 0.0) if gpt_validation else 0.0
 
         # 간단한 합의 점수 (실제로는 uc2_hitl.py의 calculate_consensus_score 사용)
         consensus_score = (
             gpt_confidence * 0.3
-            + gemini_confidence * 0.3
+            + gpt4o_confidence * 0.3
             + (1.0 if consensus_reached else 0.0) * 0.4
         )
 
@@ -1132,7 +1192,7 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
                     "consensus_score": round(consensus_score, 2),
                     "proposed_selectors": final_selectors,
                     "gpt_analysis": gpt_proposal,
-                    "gemini_validation": gemini_validation,
+                    "gpt_validation": gpt_validation,
                 },
                 "current_uc": "uc2",
                 "workflow_history": state.get("workflow_history", [])

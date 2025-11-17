@@ -132,10 +132,10 @@ def view_decision_logs(db):
         print(f"  Site Name: {log.site_name}")
         print(f"  GPT Analysis: {str(log.gpt_analysis)[:100] if log.gpt_analysis else 'NULL'}...")
         print(
-            f"  Gemini Validation: {str(log.gemini_validation)[:100] if log.gemini_validation else 'NULL'}..."
+            f"  GPT-4o Validation: {str(log.gpt4o_validation)[:100] if log.gpt4o_validation else 'NULL'}..."
         )
         print(f"  Consensus Reached: {log.consensus_reached}")
-        print(f"  New Selector Generated: {log.new_selector_generated}")
+        print(f"  Retry Count: {log.retry_count}")
         print(f"  Created At: {log.created_at}")
         print("-" * 80)
 

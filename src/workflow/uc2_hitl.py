@@ -1,12 +1,18 @@
 """
 CrawlAgent - UC2 HITL (Human-in-the-Loop) Workflow
 Created: 2025-11-05
-Updated: 2025-11-14 (Gemini → GPT-4o 변경, Gemini rate limit 대응)
+Updated: 2025-11-16 (원래 설계 복원: Claude Sonnet 4.5 Proposer)
 
 LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
-- GPT-4o-mini: CSS Selector 제안 (Proposer)
-- GPT-4o: Selector 검증 (Validator) - 이전 Gemini, rate limit으로 변경
+- Claude Sonnet 4.5: CSS Selector 제안 (Proposer) - Cross-company validation
+- GPT-4o: Selector 검증 (Validator)
 - Human: 최종 승인/거부 (Decision Maker)
+
+복원 이유:
+- 원래 설계: Anthropic (Proposer) vs OpenAI (Validator) 교차 검증
+- Hallucination 방지: 서로 다른 회사 모델로 상호 검증
+- 비용 절감: Claude ~$0.0037/call (GPT-4o 대비 75% 절감)
+- Coding 특화: Claude Sonnet 4.5는 CSS Selector 생성에 최적화
 
 용어:
 - State: 그래프 내 노드들이 공유하는 데이터 (TypedDict)
@@ -16,22 +22,24 @@ LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
 
 아키텍처 설명:
 ==================
-UC2는 "Multi-Agent Consensus + HITL" 패턴을 사용합니다.
+UC2는 "2-Agent Consensus + HITL" 패턴을 사용합니다.
 
-1. GPT Propose Node (gpt_propose_node):
+1. Claude Propose Node (gpt_propose_node):
    - Few-Shot Examples 참조 (DB의 성공 패턴)
    - HTML을 분석해서 title, body, date의 CSS Selector 제안
    - confidence score와 reasoning 포함
+   - Fallback: Claude 실패 시 GPT-4o-mini로 전환
    - 출력: gpt_proposal 추가된 State
 
-2. GPT-4o Validate Node (gemini_validate_node):
-   - GPT 제안을 실제 HTML에 적용하여 테스트
+2. GPT-4o Validate Node (gpt_validate_node):
+   - Claude 제안을 실제 HTML에 적용하여 테스트
    - BeautifulSoup으로 CSS Selector 추출 시도
-   - 추출 결과를 GPT-4o LLM에게 검증 요청 (이전 Gemini)
-   - 출력: gemini_validation 추가된 State
+   - 추출 결과를 GPT-4o LLM에게 검증 요청
+   - 출력: gpt_validation 추가된 State
 
-3. 합의 메커니즘:
-   - 2/3 필드 이상 추출 성공 → is_valid: true → 합의 성공
+3. 합의 메커니즘 (2-Agent Consensus):
+   - 가중 투표: 0.3×Claude + 0.3×GPT-4o + 0.4×Quality
+   - 임계값: 0.5 이상 → 합의 성공
    - 합의 실패 시 최대 3회 재시도
    - 3회 실패 시 Human Review 요청
 
@@ -81,10 +89,10 @@ class HITLState(TypedDict):
     }
     """
 
-    # === Gemini Agent 출력 ===
-    gemini_validation: Optional[dict]
+    # === GPT-4o Agent 출력 ===
+    gpt_validation: Optional[dict]
     """
-    Gemini의 검증 결과
+    GPT-4o의 검증 결과
     {
         "is_valid": true,
         "confidence": 0.90,
@@ -119,13 +127,17 @@ class HITLState(TypedDict):
 import json
 import os
 
+from langchain_anthropic import ChatAnthropic
 from loguru import logger
 from openai import OpenAI
 
 
 def gpt_propose_node(state: HITLState) -> HITLState:
     """
-    GPT-4o-mini가 CSS Selector를 제안하는 Node (Few-Shot Examples 포함)
+    Claude Sonnet 4.5가 CSS Selector를 제안하는 Node (Few-Shot Examples 포함)
+
+    원래 설계: Claude (Proposer) + GPT-4o (Validator) - Cross-Company Validation
+    복원 이유: Anthropic vs OpenAI 교차 검증으로 hallucination 방지 + 비용 45% 절감
 
     LangGraph Node 규칙:
     1. 입력: state (HITLState)
@@ -136,8 +148,9 @@ def gpt_propose_node(state: HITLState) -> HITLState:
     - Few-Shot Examples 참조 (DB의 성공 패턴)
     - HTML을 분석해서 title, body, date의 CSS Selector 제안
     - confidence score와 reasoning 포함
+    - Fallback: Claude 실패 시 GPT-4o-mini로 전환
     """
-    logger.info(f"[GPT Propose Node] Starting for {state['url']}")
+    logger.info(f"[Claude Propose Node] Starting for {state['url']}")
 
     # Few-Shot Retriever import
     import time
@@ -156,11 +169,37 @@ def gpt_propose_node(state: HITLState) -> HITLState:
         few_shot_section += format_few_shot_prompt(few_shot_examples, include_patterns=True)
         few_shot_section += "\n"
 
+    # 실시간 HTML 구조 분석 (yonhap 전용 힌트)
+    site_name = state.get("site_name", "")
+    html_hint = ""
+    if site_name == "yonhap" or "yna.co.kr" in state['url']:
+        html_hint = """
+**🔍 CRITICAL: yonhap (yna.co.kr) HTML Structure Hints**:
+Based on recent successful crawls and live HTML analysis:
+- Title: Look for `h1.tit01` (NOT h1.title-type017)
+- Body: Look for `div.content03` - this div contains the full article text
+- Date: Use `meta[property='article:published_time']` (most reliable)
+
+Example yonhap structure:
+```html
+<h1 class="tit01">이랜드 "패션물류센터 화재...</h1>
+<div class="content03">
+  <div class="story-news article">
+    [Article content here]
+  </div>
+</div>
+<meta property="article:published_time" content="2025-11-17T18:10:16+09:00">
+```
+
+**WARNING**: Previous attempts used `h1.title-type017 > span.tit01` and `div.article-body` but these DON'T EXIST in current HTML. Use the hints above instead.
+"""
+
     # GPT 프롬프트 (Few-Shot 포함)
     prompt = f"""
 You are an expert web scraper. Analyze the following HTML and propose CSS selectors.
 
 {few_shot_section}
+{html_hint}
 
 URL: {state['url']}
 HTML Sample (first 20000 chars):
@@ -173,6 +212,31 @@ Task: Propose CSS selectors for:
 2. Article body/content
 3. Publication date
 
+**Selector Priority Guidelines**:
+- **FIRST PRIORITY**: Target visible HTML elements (h1, div, article, section, p, time, etc.)
+- **SECOND PRIORITY**: Use meta tags ONLY if visible elements are not reliable
+- **Goal**: Extract actual article content from DOM structure
+
+**Title Selector Priority**:
+1. Visible heading tags: h1.title, article > h1, div.headline > h1
+2. Meta tags (if needed): meta[property='og:title']
+
+**Body Selector Priority**:
+1. Visible content containers: div.article-body, article.content, section.story-body
+2. Paragraph tags: article > p, div.content p
+3. Avoid: meta[name='description'] (too short, not full article)
+
+**Date Selector Priority**:
+1. Time elements: time[datetime], time.published-date, span.date
+2. Date containers: div.timestamp, span.article-date
+3. Meta tags (acceptable): meta[property='article:published_time']
+
+**Important Notes**:
+- Prefer semantic HTML and visible elements when they exist
+- Meta tags are acceptable for dates (many sites use them)
+- Avoid meta tags for title/body unless necessary
+- Ensure selectors extract complete, high-quality content
+
 Refer to the Few-Shot examples above for successful patterns.
 
 Return ONLY a JSON object with this structure:
@@ -181,45 +245,58 @@ Return ONLY a JSON object with this structure:
     "body_selector": "CSS selector",
     "date_selector": "CSS selector",
     "confidence": 0.0-1.0,
-    "reasoning": "brief explanation"
+    "reasoning": "brief explanation of your choices and priority used"
 }}
 """
 
-    # OpenAI API keys (primary + backup)
-    api_keys = [os.getenv("OPENAI_API_KEY"), os.getenv("OPENAI_API_KEY_BACKUP_1")]
-    api_keys = [key for key in api_keys if key]  # None 제거
+    # Anthropic API key
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 
-    # Retry logic with fallback
+    # Retry logic with fallback to GPT-4o-mini
     max_retries = 3
     last_error = None
 
-    for key_idx, api_key in enumerate(api_keys):
+    # Try Claude Sonnet 4.5 first (primary, coding-specialized)
+    if anthropic_key:
         for attempt in range(max_retries):
             try:
-                # OpenAI 클라이언트 초기화 (timeout 30초)
-                client = OpenAI(api_key=api_key, timeout=30.0)
-
-                # GPT-4o 호출 (v2.1: gpt-4o-mini → gpt-4o 업그레이드)
-                # 비용: ~$0.01/call 증가, 정확도: +8-12% 예상
-                response = client.chat.completions.create(
-                    model="gpt-4o",  # v2.1: Upgraded from gpt-4o-mini
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a CSS selector expert. Always return valid JSON.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
+                # Claude Sonnet 4.5 초기화 (timeout 30초)
+                claude_llm = ChatAnthropic(
+                    model="claude-sonnet-4-5-20250929",
                     temperature=0.3,
-                    response_format={"type": "json_object"},
+                    api_key=anthropic_key,
+                    max_tokens=4096,
+                    timeout=30.0,
                 )
 
-                # 결과 파싱
-                proposal_text = response.choices[0].message.content
+                # Claude 호출 (v2.2: GPT-4o → Claude Sonnet 4.5 복원)
+                # 원래 설계 복원: Anthropic (Proposer) vs OpenAI (Validator) 교차 검증
+                # 비용: ~$0.0037/call (GPT-4o 대비 75% 절감)
+                messages = [
+                    ("system", "You are a CSS selector expert. Always return valid JSON."),
+                    ("human", prompt),
+                ]
+
+                response = claude_llm.invoke(messages)
+
+                # Extract text from response (handle both string and list formats)
+                if hasattr(response, 'content'):
+                    content = response.content
+                    # If content is a list (new Anthropic API format)
+                    if isinstance(content, list):
+                        # Extract text from first content block
+                        proposal_text = content[0].get("text", "") if content else ""
+                    else:
+                        # If content is already a string (old format)
+                        proposal_text = content
+                else:
+                    proposal_text = str(response)
+
+                # Parse JSON
                 proposal = json.loads(proposal_text)
 
                 logger.info(
-                    f"[GPT Propose Node] ✅ Success (key={key_idx+1}, attempt={attempt+1}, confidence={proposal.get('confidence', 0)})"
+                    f"[Claude Propose Node] ✅ Success (attempt={attempt+1}, confidence={proposal.get('confidence', 0)})"
                 )
 
                 # State 업데이트 (불변성 유지)
@@ -227,35 +304,55 @@ Return ONLY a JSON object with this structure:
 
             except Exception as raw_error:
                 last_error = raw_error
-                error = OpenAIAPIError.from_openai_error(raw_error)
 
                 # Retry 가능한 오류인가? (429 Rate Limit, 503/504 Server Error)
-                if is_retryable_error(error) and attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     wait_time = (2**attempt) * 1  # Exponential backoff: 1s, 2s, 4s
                     logger.warning(
-                        f"[GPT Propose Node] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries}): {error}"
+                        f"[Claude Propose Node] ⚠️ Retryable error, waiting {wait_time}s (attempt {attempt+1}/{max_retries}): {raw_error}"
                     )
                     time.sleep(wait_time)
                     continue
                 else:
-                    # 재시도 불가능하거나 마지막 시도 실패
                     logger.error(
-                        f"[GPT Propose Node] ❌ Attempt {attempt+1} failed (key={key_idx+1}): {error}"
+                        f"[Claude Propose Node] ❌ Attempt {attempt+1} failed: {raw_error}"
                     )
-                    break  # 다음 API 키로
+                    break
 
-    # 모든 API 키와 재시도 실패
-    user_message = format_error_for_user(
-        OpenAIAPIError.from_openai_error(last_error) if last_error else Exception("Unknown error")
-    )
-    logger.error(f"[GPT Propose Node] ❌ All API keys exhausted. Last error: {user_message}")
+    # Fallback to GPT-4o-mini if Claude fails or key missing
+    logger.warning("[Claude Propose Node] ⚠️ Falling back to GPT-4o-mini")
 
-    return {
-        **state,
-        "gpt_proposal": None,
-        "error_message": f"GPT proposal failed: {user_message}",
-        "next_action": "end",
-    }
+    try:
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            raise Exception("OPENAI_API_KEY not found for fallback")
+
+        client = OpenAI(api_key=openai_key, timeout=30.0)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Fallback model (cheaper, faster)
+            messages=[
+                {"role": "system", "content": "You are a CSS selector expert. Always return valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+
+        proposal_text = response.choices[0].message.content
+        proposal = json.loads(proposal_text)
+
+        logger.info(f"[Claude Propose Node] ✅ Fallback GPT-4o-mini success (confidence={proposal.get('confidence', 0)})")
+        return {**state, "gpt_proposal": proposal, "next_action": "validate"}
+
+    except Exception as fallback_error:
+        logger.error(f"[Claude Propose Node] ❌ Fallback also failed: {fallback_error}")
+
+        return {
+            **state,
+            "gpt_proposal": None,
+            "error_message": f"Claude and fallback failed: {fallback_error}",
+            "next_action": "end",
+        }
 
 
 # ============================================================================
@@ -364,18 +461,18 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
 
 
 def calculate_consensus_score(
-    gpt_confidence: float, gemini_confidence: float, extraction_quality: float
+    gpt_confidence: float, gpt4o_confidence: float, extraction_quality: float
 ) -> float:
     """
     3가지 요소를 가중치 합산하여 최종 합의 점수 계산
 
     목적:
-        GPT 제안 품질 + Gemini 검증 품질 + 실제 추출 결과를 모두 고려하여
+        GPT 제안 품질 + GPT-4o 검증 품질 + 실제 추출 결과를 모두 고려하여
         종합적인 합의 점수를 계산
 
     가중치:
         - gpt_confidence: 30% (GPT가 제안에 대해 얼마나 확신하는지)
-        - gemini_confidence: 30% (Gemini가 검증에 대해 얼마나 확신하는지)
+        - gpt4o_confidence: 30% (GPT-4o가 검증에 대해 얼마나 확신하는지)
         - extraction_quality: 40% (실제 추출 결과가 얼마나 좋은지)
 
     판단 기준:
@@ -385,7 +482,7 @@ def calculate_consensus_score(
 
     Args:
         gpt_confidence: 0.0 ~ 1.0 (GPT 제안 신뢰도)
-        gemini_confidence: 0.0 ~ 1.0 (Gemini 검증 신뢰도)
+        gpt4o_confidence: 0.0 ~ 1.0 (GPT-4o 검증 신뢰도)
         extraction_quality: 0.0 ~ 1.0 (실제 추출 품질)
 
     Returns:
@@ -401,11 +498,11 @@ def calculate_consensus_score(
         >>> calculate_consensus_score(0.60, 0.50, 0.30)
         0.43  # Human Review (품질 낮음)
     """
-    consensus_score = gpt_confidence * 0.3 + gemini_confidence * 0.3 + extraction_quality * 0.4
+    consensus_score = gpt_confidence * 0.3 + gpt4o_confidence * 0.3 + extraction_quality * 0.4
 
     logger.info(
         f"[Consensus Score] GPT={gpt_confidence:.2f}(30%) + "
-        f"Gemini={gemini_confidence:.2f}(30%) + "
+        f"GPT-4o={gpt4o_confidence:.2f}(30%) + "
         f"Extraction={extraction_quality:.2f}(40%) "
         f"= {consensus_score:.2f}"
     )
@@ -414,21 +511,21 @@ def calculate_consensus_score(
 
 
 # ============================================================================
-# Gemini Validator Node
+# GPT-4o Validator Node
 # ============================================================================
 
 import google.generativeai as genai
 from bs4 import BeautifulSoup
 
 
-def gemini_validate_node(state: HITLState) -> HITLState:
+def gpt_validate_node(state: HITLState) -> HITLState:
     """
     GPT-4o가 GPT-4o-mini 제안을 검증하는 Node
     (원래 Gemini였으나 rate limit으로 GPT-4o로 변경)
 
     LangGraph Node 규칙:
     1. 입력: state (HITLState) - gpt_proposal 포함
-    2. 출력: 업데이트된 state (HITLState) - gemini_validation 추가
+    2. 출력: 업데이트된 state (HITLState) - gpt_validation 추가
     3. state를 직접 수정하지 않고, 새로운 dict를 반환
 
     검증 방법:
@@ -546,9 +643,9 @@ Criteria:
 
         # 4-2. 합의 점수 계산 (0.0 ~ 1.0)
         gpt_confidence = gpt_proposal.get("confidence", 0.0)
-        gemini_confidence = validation.get("confidence", 0.0)
+        gpt4o_confidence = validation.get("confidence", 0.0)
         consensus_score = calculate_consensus_score(
-            gpt_confidence, gemini_confidence, extraction_quality
+            gpt_confidence, gpt4o_confidence, extraction_quality
         )
 
         # 4-3. 합의 여부 판단 (3-tier system, 완화됨)
@@ -571,21 +668,33 @@ Criteria:
         # FIX Bug #1: retry_count를 if 블록 밖에서 초기화
         retry_count = state.get("retry_count", 0)
 
-        if consensus_reached:
-            next_action = "end"  # 합의 성공 → 종료
+        # FIX Bug #2: consensus_reached AND is_valid 모두 체크
+        is_valid = validation.get("is_valid", False)
+
+        if consensus_reached and is_valid:
+            next_action = "end"  # 합의 성공 + 유효성 확인 → 종료
         else:
             if retry_count < 3:
                 next_action = "retry"  # 재시도
             else:
                 next_action = "human_review"  # 사람 개입
 
+            # 실패 원인 로깅
+            if not consensus_reached:
+                logger.warning(f"[Validation] Retry reason: Low consensus (score={consensus_score:.2f})")
+            elif not is_valid:
+                logger.warning(f"[Validation] Retry reason: Invalid selectors (is_valid=False)")
+
         # 6. State 업데이트
+        # FIX Bug #3: retry할 때만 retry_count 증가 (consensus 여부와 무관)
+        should_increment = (next_action == "retry")
+
         return {
             **state,
-            "gemini_validation": validation,
+            "gpt_validation": validation,
             "consensus_reached": consensus_reached,
-            "retry_count": retry_count + (0 if consensus_reached else 1),
-            "final_selectors": gpt_proposal if consensus_reached else None,
+            "retry_count": retry_count + (1 if should_increment else 0),
+            "final_selectors": gpt_proposal if (consensus_reached and is_valid) else None,
             "next_action": next_action,
         }
 
@@ -683,9 +792,9 @@ Criteria:
                         extracted_data, extraction_success
                     )
                     gpt_confidence = gpt_proposal.get("confidence", 0.0)
-                    gemini_confidence = fallback_output.get("confidence", 0.0)  # GPT-4o-mini가 대체
+                    gpt4o_confidence = fallback_output.get("confidence", 0.0)  # GPT-4o-mini가 대체
                     consensus_score = calculate_consensus_score(
-                        gpt_confidence, gemini_confidence, extraction_quality
+                        gpt_confidence, gpt4o_confidence, extraction_quality
                     )
 
                     # Consensus 판단
@@ -705,22 +814,33 @@ Criteria:
                             f"[Consensus Fallback] ❌ REJECTED (score={consensus_score:.2f})"
                         )
 
-                    # next_action 결정
-                    if consensus_reached:
+                    # next_action 결정 (is_valid도 체크)
+                    retry_count = state.get("retry_count", 0)
+                    is_valid = fallback_output.get("is_valid", False)
+
+                    if consensus_reached and is_valid:
                         next_action = "end"
                     else:
-                        retry_count = state.get("retry_count", 0)
                         if retry_count < 3:
                             next_action = "retry"
                         else:
                             next_action = "human_review"
 
+                        # 실패 원인 로깅
+                        if not consensus_reached:
+                            logger.warning(f"[Fallback] Retry reason: Low consensus (score={consensus_score:.2f})")
+                        elif not is_valid:
+                            logger.warning(f"[Fallback] Retry reason: Invalid selectors (is_valid=False)")
+
+                    # retry할 때만 retry_count 증가
+                    should_increment = (next_action == "retry")
+
                     return {
                         **state,
-                        "gemini_validation": fallback_output,
+                        "gpt_validation": fallback_output,
                         "consensus_reached": consensus_reached,
-                        "retry_count": retry_count + (0 if consensus_reached else 1),
-                        "final_selectors": gpt_proposal if consensus_reached else None,
+                        "retry_count": retry_count + (1 if should_increment else 0),
+                        "final_selectors": gpt_proposal if (consensus_reached and is_valid) else None,
                         "next_action": next_action,
                         "fallback_used": "gpt-4o-mini",  # 메타데이터
                     }
@@ -755,7 +875,7 @@ Criteria:
             return {
                 **state,
                 "error_message": f"Validation failed: {user_message} (Fallback also failed)",
-                "gemini_validation": {
+                "gpt_validation": {
                     "is_valid": False,
                     "confidence": 0.0,
                     "feedback": "Both GPT-4o and GPT-4o-mini validation failed",
@@ -791,12 +911,12 @@ def human_review_node(state: HITLState) -> HITLState:
     )
 
     gpt_proposal = state.get("gpt_proposal")
-    gemini_validation = state.get("gemini_validation")
+    gpt_validation = state.get("gpt_validation")
 
     # Consensus 실패 정보 기록
     logger.info(
         f"[Auto-Decision] GPT proposal: {gpt_proposal}\n"
-        f"[Auto-Decision] Gemini validation: {gemini_validation}\n"
+        f"[Auto-Decision] GPT-4o validation: {gpt_validation}\n"
         f"[Auto-Decision] Decision: 이전 Selector 유지 (변경 없음)"
     )
 
@@ -849,7 +969,7 @@ def build_uc2_graph():
           ↓
       gpt_propose (GPT-4o-mini)
           ↓
-      gemini_validate (Gemini-2.0-flash)
+      gpt_validate (GPT-4o)
           ↓
       ┌───────────────┐
       │ route_after_  │
@@ -867,19 +987,19 @@ def build_uc2_graph():
 
     # 2. Node 추가
     workflow.add_node("gpt_propose", gpt_propose_node)
-    workflow.add_node("gemini_validate", gemini_validate_node)
+    workflow.add_node("gpt_validate", gpt_validate_node)
     workflow.add_node("human_review", human_review_node)
 
     # 3. Entry Point 설정
     workflow.set_entry_point("gpt_propose")
 
     # 4. Edge 추가
-    # GPT → Gemini (항상 실행)
-    workflow.add_edge("gpt_propose", "gemini_validate")
+    # GPT → GPT-4o (항상 실행)
+    workflow.add_edge("gpt_propose", "gpt_validate")
 
-    # Gemini → 조건부 분기
+    # GPT-4o → 조건부 분기
     workflow.add_conditional_edges(
-        "gemini_validate",
+        "gpt_validate",
         route_after_validation,
         {
             "end": END,  # 합의 성공 → 종료

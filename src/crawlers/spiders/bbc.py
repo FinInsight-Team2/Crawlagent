@@ -24,27 +24,40 @@ from src.storage.models import CrawlResult, Selector
 
 class BBCSpider(scrapy.Spider):
     """
-    BBC News Spider (SSR) - 2-stage crawling
+    BBC News Spider (SSR) - 2-stage crawling with category support
 
     Usage:
-        # Crawl from homepage
+        # Crawl from homepage (all categories)
         scrapy crawl bbc
 
+        # Crawl specific category
+        scrapy crawl bbc -a category=uk
+        scrapy crawl bbc -a category=world
+        scrapy crawl bbc -a category=politics
+
         # Limit number of articles
-        scrapy crawl bbc -a max_articles=10
+        scrapy crawl bbc -a max_articles=10 -a category=business
     """
 
     name = "bbc"
     allowed_domains = ["bbc.com"]
 
-    def __init__(self, max_articles=None, *args, **kwargs):
+    def __init__(self, max_articles=None, category=None, *args, **kwargs):
         super(BBCSpider, self).__init__(*args, **kwargs)
 
         # Max articles limit (optional)
         self.max_articles = int(max_articles) if max_articles else None
 
-        # Start URL: BBC News homepage
-        self.start_urls = ["https://www.bbc.com/news"]
+        # Category support (UK, World, Business, Politics, etc.)
+        self.category = category
+
+        # Start URL: BBC News homepage or category page
+        if self.category:
+            self.start_urls = [f"https://www.bbc.com/news/{self.category}"]
+            self.logger.info(f"[INIT] Crawling BBC category: {self.category}")
+        else:
+            self.start_urls = ["https://www.bbc.com/news"]
+            self.logger.info(f"[INIT] Crawling BBC homepage (all categories)")
 
         # PostgreSQL에서 Selector 로드
         db_gen = get_db()

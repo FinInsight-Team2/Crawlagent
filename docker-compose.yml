@@ -1,13 +1,16 @@
 version: '3.8'
 
 services:
+  # ========================================
+  # PostgreSQL Database
+  # ========================================
   postgres:
     image: postgres:16
     container_name: crawlagent-postgres
     environment:
       POSTGRES_DB: crawlagent
       POSTGRES_USER: crawlagent
-      POSTGRES_PASSWORD: dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
       - "5432:5432"
@@ -20,7 +23,111 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - crawlagent-network
 
+  # ========================================
+  # CrawlAgent Web UI (Gradio)
+  # ========================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crawlagent-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: postgresql://crawlagent:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/crawlagent
+
+      # API Keys (from .env file)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # Server Config
+      GRADIO_SERVER_NAME: 0.0.0.0
+      GRADIO_PORT: 7860
+
+      # LLM Models
+      UC2_PROPOSER_MODEL: ${UC2_PROPOSER_MODEL:-gpt-4o}
+      UC2_VALIDATOR_MODEL: ${UC2_VALIDATOR_MODEL:-gpt-4o}
+      UC3_DISCOVERER_MODEL: ${UC3_DISCOVERER_MODEL:-claude-sonnet-4-5-20250929}
+      UC3_VALIDATOR_MODEL: ${UC3_VALIDATOR_MODEL:-gpt-4o}
+
+      # Thresholds
+      UC1_QUALITY_THRESHOLD: ${UC1_QUALITY_THRESHOLD:-80.0}
+      UC2_CONSENSUS_THRESHOLD: ${UC2_CONSENSUS_THRESHOLD:-0.5}
+      UC3_CONSENSUS_THRESHOLD: ${UC3_CONSENSUS_THRESHOLD:-0.5}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # Feature Flags
+      ENABLE_JSON_LD_OPTIMIZATION: ${ENABLE_JSON_LD_OPTIMIZATION:-true}
+      ENABLE_COST_TRACKING: ${ENABLE_COST_TRACKING:-true}
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - crawlagent-network
+
+  # ========================================
+  # Scheduler (Daily Auto-Crawling)
+  # ========================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crawlagent-scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: postgresql://crawlagent:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/crawlagent
+
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # LLM Models
+      UC2_PROPOSER_MODEL: ${UC2_PROPOSER_MODEL:-gpt-4o}
+      UC2_VALIDATOR_MODEL: ${UC2_VALIDATOR_MODEL:-gpt-4o}
+      UC3_DISCOVERER_MODEL: ${UC3_DISCOVERER_MODEL:-claude-sonnet-4-5-20250929}
+      UC3_VALIDATOR_MODEL: ${UC3_VALIDATOR_MODEL:-gpt-4o}
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: ["python", "src/scheduler/daily_crawler.py"]
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    networks:
+      - crawlagent-network
+
+# ========================================
+# Networks
+# ========================================
+networks:
+  crawlagent-network:
+    driver: bridge
+
+# ========================================
+# Volumes
+# ========================================
 volumes:
   postgres_data:
     driver: local
