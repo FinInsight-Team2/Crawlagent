@@ -2,7 +2,7 @@
 
 > **프로젝트 명칭**: CrawlAgent (pyproject.toml)
 > **개발 단계**: Phase 1 PoC 완료 ✅
-> **최종 업데이트**: 2025-11-14
+> **최종 업데이트**: 2025-11-19
 
 **LangGraph 기반 Multi-Agent 자동화 웹 크롤러** - AI가 HTML 구조 변경을 자동으로 감지하고 복구하는 Self-Healing 시스템
 
@@ -592,7 +592,16 @@ poetry run python src/ui/app.py
 - **개발자**: Claude Code (Anthropic) + Charlee
 - **버전**: 2.0.0 (Phase 1 PoC 완료)
 - **GitHub**: (Private Repository)
-- **문서**: [README.md](README.md), [distributed_supervisor.py](src/workflow/distributed_supervisor.py), [models.py](src/storage/models.py)
+- **핵심 문서**:
+  - **핸드오프 가이드**:
+    - [QUICK_START_HANDOFF.md](QUICK_START_HANDOFF.md) - 10분 빠른 시작 (핸드오프용)
+    - [HANDOFF_SUMMARY.md](HANDOFF_SUMMARY.md) - 최종 변경사항 요약 (2025-11-19)
+  - **기술 문서**:
+    - [CONFIGURATION.md](CONFIGURATION.md) - 환경변수 설정 가이드
+    - [TESTING.md](TESTING.md) - 테스트 실행 및 작성 가이드
+    - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) - 데이터베이스 스키마 문서
+  - **프레젠테이션**:
+    - [HANDOFF_PACKAGE/](HANDOFF_PACKAGE/) - 프로젝트 핸드오프 패키지 (12개 문서)
 
 ---
 

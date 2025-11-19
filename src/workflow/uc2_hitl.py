@@ -24,12 +24,12 @@ LangGraph를 사용한 2-Agent CSS Selector 합의 시스템:
 ==================
 UC2는 "2-Agent Consensus + HITL" 패턴을 사용합니다.
 
-1. Claude Propose Node (gpt_propose_node):
+1. Claude Propose Node (claude_propose_node):
    - Few-Shot Examples 참조 (DB의 성공 패턴)
    - HTML을 분석해서 title, body, date의 CSS Selector 제안
    - confidence score와 reasoning 포함
    - Fallback: Claude 실패 시 GPT-4o-mini로 전환
-   - 출력: gpt_proposal 추가된 State
+   - 출력: claude_proposal 추가된 State
 
 2. GPT-4o Validate Node (gpt_validate_node):
    - Claude 제안을 실제 HTML에 적용하여 테스트
@@ -46,7 +46,7 @@ UC2는 "2-Agent Consensus + HITL" 패턴을 사용합니다.
 4. State 불변성 (Immutability):
    - 모든 Node는 state를 직접 수정하지 않음
    - spread operator (**state)로 새로운 dict 반환
-   - 예: return {**state, "gpt_proposal": proposal}
+   - 예: return {**state, "claude_proposal": proposal}
 """
 
 from typing import Literal, Optional, TypedDict
@@ -76,10 +76,10 @@ class HITLState(TypedDict):
     html_content: Optional[str]
     """fetch한 HTML 원본"""
 
-    # === GPT Agent 출력 ===
-    gpt_proposal: Optional[dict]
+    # === Claude Agent 출력 ===
+    claude_proposal: Optional[dict]
     """
-    GPT가 제안한 CSS Selector
+    Claude Sonnet 4.5가 제안한 CSS Selector
     {
         "title_selector": "h1.article-title",
         "body_selector": "div.article-body",
@@ -132,7 +132,7 @@ from loguru import logger
 from openai import OpenAI
 
 
-def gpt_propose_node(state: HITLState) -> HITLState:
+def claude_propose_node(state: HITLState) -> HITLState:
     """
     Claude Sonnet 4.5가 CSS Selector를 제안하는 Node (Few-Shot Examples 포함)
 
@@ -300,7 +300,7 @@ Return ONLY a JSON object with this structure:
                 )
 
                 # State 업데이트 (불변성 유지)
-                return {**state, "gpt_proposal": proposal, "next_action": "validate"}
+                return {**state, "claude_proposal": proposal, "next_action": "validate"}
 
             except Exception as raw_error:
                 last_error = raw_error
@@ -342,14 +342,14 @@ Return ONLY a JSON object with this structure:
         proposal = json.loads(proposal_text)
 
         logger.info(f"[Claude Propose Node] ✅ Fallback GPT-4o-mini success (confidence={proposal.get('confidence', 0)})")
-        return {**state, "gpt_proposal": proposal, "next_action": "validate"}
+        return {**state, "claude_proposal": proposal, "next_action": "validate"}
 
     except Exception as fallback_error:
         logger.error(f"[Claude Propose Node] ❌ Fallback also failed: {fallback_error}")
 
         return {
             **state,
-            "gpt_proposal": None,
+            "claude_proposal": None,
             "error_message": f"Claude and fallback failed: {fallback_error}",
             "next_action": "end",
         }
@@ -461,17 +461,17 @@ def calculate_extraction_quality(extracted_data: dict, extraction_success: dict)
 
 
 def calculate_consensus_score(
-    gpt_confidence: float, gpt4o_confidence: float, extraction_quality: float
+    claude_confidence: float, gpt4o_confidence: float, extraction_quality: float
 ) -> float:
     """
     3가지 요소를 가중치 합산하여 최종 합의 점수 계산
 
     목적:
-        GPT 제안 품질 + GPT-4o 검증 품질 + 실제 추출 결과를 모두 고려하여
+        Claude 제안 품질 + GPT-4o 검증 품질 + 실제 추출 결과를 모두 고려하여
         종합적인 합의 점수를 계산
 
     가중치:
-        - gpt_confidence: 30% (GPT가 제안에 대해 얼마나 확신하는지)
+        - claude_confidence: 30% (Claude가 제안에 대해 얼마나 확신하는지)
         - gpt4o_confidence: 30% (GPT-4o가 검증에 대해 얼마나 확신하는지)
         - extraction_quality: 40% (실제 추출 결과가 얼마나 좋은지)
 
@@ -481,7 +481,7 @@ def calculate_consensus_score(
         - < 0.6: Human Review 필요 (Low confidence)
 
     Args:
-        gpt_confidence: 0.0 ~ 1.0 (GPT 제안 신뢰도)
+        claude_confidence: 0.0 ~ 1.0 (Claude 제안 신뢰도)
         gpt4o_confidence: 0.0 ~ 1.0 (GPT-4o 검증 신뢰도)
         extraction_quality: 0.0 ~ 1.0 (실제 추출 품질)
 
@@ -498,10 +498,10 @@ def calculate_consensus_score(
         >>> calculate_consensus_score(0.60, 0.50, 0.30)
         0.43  # Human Review (품질 낮음)
     """
-    consensus_score = gpt_confidence * 0.3 + gpt4o_confidence * 0.3 + extraction_quality * 0.4
+    consensus_score = claude_confidence * 0.3 + gpt4o_confidence * 0.3 + extraction_quality * 0.4
 
     logger.info(
-        f"[Consensus Score] GPT={gpt_confidence:.2f}(30%) + "
+        f"[Consensus Score] Claude={claude_confidence:.2f}(30%) + "
         f"GPT-4o={gpt4o_confidence:.2f}(30%) + "
         f"Extraction={extraction_quality:.2f}(40%) "
         f"= {consensus_score:.2f}"
@@ -524,7 +524,7 @@ def gpt_validate_node(state: HITLState) -> HITLState:
     (원래 Gemini였으나 rate limit으로 GPT-4o로 변경)
 
     LangGraph Node 규칙:
-    1. 입력: state (HITLState) - gpt_proposal 포함
+    1. 입력: state (HITLState) - claude_proposal 포함
     2. 출력: 업데이트된 state (HITLState) - gpt_validation 추가
     3. state를 직접 수정하지 않고, 새로운 dict를 반환
 
@@ -538,8 +538,8 @@ def gpt_validate_node(state: HITLState) -> HITLState:
 
     try:
         # 1. GPT 제안 가져오기
-        gpt_proposal = state.get("gpt_proposal")
-        if not gpt_proposal:
+        claude_proposal = state.get("claude_proposal")
+        if not claude_proposal:
             raise ValueError("No GPT proposal found in state")
 
         # 2. CSS Selector로 실제 데이터 추출 시도
@@ -551,7 +551,7 @@ def gpt_validate_node(state: HITLState) -> HITLState:
 
         for field in ["title", "body", "date"]:
             selector_key = f"{field}_selector"
-            selector = gpt_proposal.get(selector_key, "")
+            selector = claude_proposal.get(selector_key, "")
 
             try:
                 # CSS Selector 적용
@@ -585,11 +585,11 @@ You are a web scraping validator. Evaluate the following CSS selector proposal.
 
 URL: {state['url']}
 
-GPT Proposal:
-- Title Selector: {gpt_proposal.get('title_selector')}
-- Body Selector: {gpt_proposal.get('body_selector')}
-- Date Selector: {gpt_proposal.get('date_selector')}
-- GPT Confidence: {gpt_proposal.get('confidence')}
+Claude Proposal:
+- Title Selector: {claude_proposal.get('title_selector')}
+- Body Selector: {claude_proposal.get('body_selector')}
+- Date Selector: {claude_proposal.get('date_selector')}
+- Claude Confidence: {claude_proposal.get('confidence')}
 
 Extraction Results:
 - Title: {"SUCCESS" if extraction_success.get('title') else "FAILED"}
@@ -642,10 +642,10 @@ Criteria:
         extraction_quality = calculate_extraction_quality(extracted_data, extraction_success)
 
         # 4-2. 합의 점수 계산 (0.0 ~ 1.0)
-        gpt_confidence = gpt_proposal.get("confidence", 0.0)
+        claude_confidence = claude_proposal.get("confidence", 0.0)
         gpt4o_confidence = validation.get("confidence", 0.0)
         consensus_score = calculate_consensus_score(
-            gpt_confidence, gpt4o_confidence, extraction_quality
+            claude_confidence, gpt4o_confidence, extraction_quality
         )
 
         # 4-3. 합의 여부 판단 (3-tier system, 완화됨)
@@ -694,7 +694,7 @@ Criteria:
             "gpt_validation": validation,
             "consensus_reached": consensus_reached,
             "retry_count": retry_count + (1 if should_increment else 0),
-            "final_selectors": gpt_proposal if (consensus_reached and is_valid) else None,
+            "final_selectors": claude_proposal if (consensus_reached and is_valid) else None,
             "next_action": next_action,
         }
 
@@ -711,8 +711,8 @@ Criteria:
             from src.exceptions import OpenAIAPIError, format_error_for_user
 
             # GPT 제안 가져오기
-            gpt_proposal = state.get("gpt_proposal")
-            if not gpt_proposal:
+            claude_proposal = state.get("claude_proposal")
+            if not claude_proposal:
                 raise ValueError("No GPT proposal found in state")
 
             # CSS Selector로 실제 데이터 추출 시도 (Gemini에서 했던 것과 동일)
@@ -724,7 +724,7 @@ Criteria:
 
             for field in ["title", "body", "date"]:
                 selector_key = f"{field}_selector"
-                selector = gpt_proposal.get(selector_key, "")
+                selector = claude_proposal.get(selector_key, "")
 
                 try:
                     elements = soup.select(selector)
@@ -746,11 +746,11 @@ You are a web scraping validator. Evaluate the following CSS selector proposal.
 
 URL: {state['url']}
 
-GPT Proposal:
-- Title Selector: {gpt_proposal.get('title_selector')}
-- Body Selector: {gpt_proposal.get('body_selector')}
-- Date Selector: {gpt_proposal.get('date_selector')}
-- GPT Confidence: {gpt_proposal.get('confidence')}
+Claude Proposal:
+- Title Selector: {claude_proposal.get('title_selector')}
+- Body Selector: {claude_proposal.get('body_selector')}
+- Date Selector: {claude_proposal.get('date_selector')}
+- Claude Confidence: {claude_proposal.get('confidence')}
 
 Extraction Results:
 - Title: {"SUCCESS" if extraction_success.get('title') else "FAILED"}
@@ -791,10 +791,10 @@ Criteria:
                     extraction_quality = calculate_extraction_quality(
                         extracted_data, extraction_success
                     )
-                    gpt_confidence = gpt_proposal.get("confidence", 0.0)
+                    claude_confidence = claude_proposal.get("confidence", 0.0)
                     gpt4o_confidence = fallback_output.get("confidence", 0.0)  # GPT-4o-mini가 대체
                     consensus_score = calculate_consensus_score(
-                        gpt_confidence, gpt4o_confidence, extraction_quality
+                        claude_confidence, gpt4o_confidence, extraction_quality
                     )
 
                     # Consensus 판단
@@ -840,7 +840,7 @@ Criteria:
                         "gpt_validation": fallback_output,
                         "consensus_reached": consensus_reached,
                         "retry_count": retry_count + (1 if should_increment else 0),
-                        "final_selectors": gpt_proposal if (consensus_reached and is_valid) else None,
+                        "final_selectors": claude_proposal if (consensus_reached and is_valid) else None,
                         "next_action": next_action,
                         "fallback_used": "gpt-4o-mini",  # 메타데이터
                     }
@@ -910,12 +910,12 @@ def human_review_node(state: HITLState) -> HITLState:
         f"[Auto-Decision Node] 3회 재시도 실패 → 이전 Selector 유지 (URL: {state['url']})"
     )
 
-    gpt_proposal = state.get("gpt_proposal")
+    claude_proposal = state.get("claude_proposal")
     gpt_validation = state.get("gpt_validation")
 
     # Consensus 실패 정보 기록
     logger.info(
-        f"[Auto-Decision] GPT proposal: {gpt_proposal}\n"
+        f"[Auto-Decision] GPT proposal: {claude_proposal}\n"
         f"[Auto-Decision] GPT-4o validation: {gpt_validation}\n"
         f"[Auto-Decision] Decision: 이전 Selector 유지 (변경 없음)"
     )
@@ -967,7 +967,7 @@ def build_uc2_graph():
 
         START
           ↓
-      gpt_propose (GPT-4o-mini)
+      claude_propose (Claude Sonnet 4.5)
           ↓
       gpt_validate (GPT-4o)
           ↓
@@ -978,7 +978,7 @@ def build_uc2_graph():
          ↓    ↓    ↓
        END  retry  human_review
               ↓         ↓
-        gpt_propose   END
+        claude_propose   END
     """
     logger.info("[build_uc2_graph] Building LangGraph StateGraph...")
 
@@ -986,16 +986,16 @@ def build_uc2_graph():
     workflow = StateGraph(HITLState)
 
     # 2. Node 추가
-    workflow.add_node("gpt_propose", gpt_propose_node)
+    workflow.add_node("claude_propose", claude_propose_node)
     workflow.add_node("gpt_validate", gpt_validate_node)
     workflow.add_node("human_review", human_review_node)
 
     # 3. Entry Point 설정
-    workflow.set_entry_point("gpt_propose")
+    workflow.set_entry_point("claude_propose")
 
     # 4. Edge 추가
-    # GPT → GPT-4o (항상 실행)
-    workflow.add_edge("gpt_propose", "gpt_validate")
+    # Claude → GPT-4o (항상 실행)
+    workflow.add_edge("claude_propose", "gpt_validate")
 
     # GPT-4o → 조건부 분기
     workflow.add_conditional_edges(
@@ -1003,7 +1003,7 @@ def build_uc2_graph():
         route_after_validation,
         {
             "end": END,  # 합의 성공 → 종료
-            "retry": "gpt_propose",  # 재시도 → GPT 다시 실행
+            "retry": "claude_propose",  # 재시도 → Claude 다시 실행
             "human_review": "human_review",  # HITL 발동
         },
     )

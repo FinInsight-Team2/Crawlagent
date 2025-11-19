@@ -913,7 +913,7 @@ def create_ui():
                     </p>
                     <p style='color: #10b981; line-height: 1.6; font-weight: 600;'>
                         <strong>CrawlAgent 해결책:</strong> Supervisor가 상황에 따라 UC1/UC2/UC3 자동 선택
-                        <br>→ 첫 학습 후 재사용 (~$0) | 변경 감지 시 자동 Self-Healing (~$0.0137)
+                        <br>→ 첫 학습 후 재사용 (~$0) | 변경 감지 시 자동 Self-Healing (~$0.002)
                     </p>
                 </div>
                 """)
@@ -926,8 +926,8 @@ def create_ui():
 
                     **동작 방식**:
                     - **UC1 (Quality Gate)**: Selector 존재 시 → 품질 검증 (80점 이상 통과) → **비용 $0**
-                    - **UC2 (Self-Healing)**: UC1 실패 시 → 2-Agent Consensus (Claude + GPT-4o) → Selector 자동 수정 → **비용 ~$0.0137**
-                    - **UC3 (Discovery)**: Selector 미존재 시 → 2-Agent Consensus (Claude + GPT-4o) → 신규 등록 → **비용 ~$0.033**
+                    - **UC2 (Self-Healing)**: UC1 실패 시 → 2-Agent Consensus (2개 AI 합의) → Selector 자동 수정 → **비용 ~$0.002**
+                    - **UC3 (Discovery)**: Selector 미존재 시 → 2-Agent Consensus → 신규 등록 → **비용 $0~$0.033**
                     """
                 )
 
@@ -1370,212 +1370,1147 @@ def create_ui():
                 )
 
             # ============================================
-            # 탭3: 아키텍처 + 비용 (간소화 버전)
+            # 탭3: 아키텍처 + 비용 (탑다운 구조)
             # ============================================
             with gr.Tab("🧠 아키텍처 + 비용"):
 
-                # 안내 메시지
-                gr.HTML("""
-                <div style='background: linear-gradient(135deg, #667eea20 0%, #764ba230 100%);
-                            border: 2px solid #667eea; padding: 20px; border-radius: 10px; margin-bottom: 30px;'>
-                    <h3 style='color: #667eea; text-align: center; margin-bottom: 15px;'>
-                        📚 상세 문서는 HANDOFF_PACKAGE/ 폴더를 참고하세요
-                    </h3>
-                    <p style='color: #e5e7eb; text-align: center; margin: 0; font-size: 1.1em; line-height: 1.8;'>
-                        <strong>발표자료:</strong> 03_PRESENTATION_SLIDES_V2.md<br>
-                        <strong>개발자 가이드:</strong> 04_SKILL_INTEGRATED.md<br>
-                        <strong>트러블슈팅:</strong> 09_TROUBLESHOOTING_REFERENCE.md
-                    </p>
-                </div>
-                """)
-
                 # ==========================================
-                # 핵심 워크플로우 다이어그램 (간소화)
+                # 1단계: 왜 CrawlAgent인가? (30초)
                 # ==========================================
-                gr.Markdown("## 🧠 Master Workflow (Supervisor Pattern)")
-
                 gr.HTML("""
-                <div style='background: rgba(0,0,0,0.3); padding: 30px; border-radius: 12px; margin: 20px 0;'>
-                    <!-- START -->
-                    <div style='text-align: center; margin-bottom: 20px;'>
-                        <div style='background: #667eea; color: white; padding: 12px 25px; border-radius: 8px; display: inline-block; font-weight: 600;'>
-                            🚀 URL 입력
-                        </div>
+                <div style='background: linear-gradient(135deg, #ef444420 0%, #f59e0b20 100%);
+                            border: 3px solid #ef4444; padding: 30px; border-radius: 12px; margin: 20px 0;'>
+                    <h2 style='color: #ef4444; text-align: center; margin-bottom: 20px; font-size: 1.8em;'>
+                        💡 1. 왜 CrawlAgent인가?
+                    </h2>
+
+                    <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                        <h3 style='color: #f59e0b; margin-bottom: 15px;'>❌ 문제</h3>
+                        <ul style='color: #e5e7eb; line-height: 2; font-size: 1.1em; margin-left: 20px;'>
+                            <li>뉴스 사이트는 <strong>평균 3-6개월마다 UI 변경</strong> → 기존 Selector 깨짐</li>
+                            <li>기존 방식: 매번 LLM 호출 (<strong>$0.03/page</strong>) 또는 수동 수정</li>
+                        </ul>
                     </div>
 
-                    <div style='text-align: center; color: #667eea; font-size: 1.5em; margin: 10px 0;'>↓</div>
-
-                    <!-- SUPERVISOR -->
-                    <div style='text-align: center; margin-bottom: 20px;'>
-                        <div style='background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 15px 30px; border-radius: 10px; display: inline-block;'>
-                            <div style='font-weight: 700; font-size: 1.1em;'>🧠 Supervisor (Rule-based)</div>
-                        </div>
+                    <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                        <h3 style='color: #10b981; margin-bottom: 15px;'>✅ CrawlAgent 해결책</h3>
+                        <ul style='color: #e5e7eb; line-height: 2; font-size: 1.1em; margin-left: 20px;'>
+                            <li><strong>Supervisor가 상황에 따라 UC1/UC2/UC3 자동 선택</strong></li>
+                            <li>첫 학습 후 재사용: <strong>$0.033 (UC3) → $0 (UC1, ∞회)</strong></li>
+                            <li>변경 감지 시 자동 Self-Healing: <strong>~$0.002 (UC2)</strong></li>
+                            <li><strong>Multi-Layer Defense (다층 방어 메커니즘)</strong>으로 SPOF (단일 장애점) 방지</li>
+                        </ul>
                     </div>
-
-                    <div style='text-align: center; color: #667eea; font-size: 1.5em; margin: 10px 0;'>↓</div>
-
-                    <!-- UC1, UC2, UC3 -->
-                    <div style='display: flex; justify-content: space-between; gap: 15px; margin-bottom: 20px;'>
-                        <div style='flex: 1; text-align: center;'>
-                            <div style='background: #10b981; color: white; padding: 20px 15px; border-radius: 8px;'>
-                                <div style='font-weight: 700; font-size: 1.1em;'>🟢 UC1</div>
-                                <div style='font-size: 0.9em; margin: 8px 0;'>재사용</div>
-                                <div style='font-size: 1.2em; font-weight: 700;'>$0</div>
-                                <div style='font-size: 0.8em; opacity: 0.9;'>~100ms</div>
-                            </div>
-                        </div>
-                        <div style='flex: 1; text-align: center;'>
-                            <div style='background: #f59e0b; color: white; padding: 20px 15px; border-radius: 8px;'>
-                                <div style='font-weight: 700; font-size: 1.1em;'>🟡 UC2</div>
-                                <div style='font-size: 0.9em; margin: 8px 0;'>복구</div>
-                                <div style='font-size: 1.2em; font-weight: 700;'>~$0.014</div>
-                                <div style='font-size: 0.8em; opacity: 0.9;'>~5s</div>
-                            </div>
-                        </div>
-                        <div style='flex: 1; text-align: center;'>
-                            <div style='background: #3b82f6; color: white; padding: 20px 15px; border-radius: 8px;'>
-                                <div style='font-weight: 700; font-size: 1.1em;'>🔵 UC3</div>
-                                <div style='font-size: 0.9em; margin: 8px 0;'>학습</div>
-                                <div style='font-size: 1.2em; font-weight: 700;'>~$0.033</div>
-                                <div style='font-size: 0.8em; opacity: 0.9;'>~8s</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """)
-
-
-                # ==========================================
-                # 비용 비교 (간소화)
-                # ==========================================
-                gr.Markdown("## 💰 비용 비교")
-
-                gr.HTML("""
-                <div style='margin: 20px 0;'>
-                    <table style='width: 100%; border-collapse: collapse; background: rgba(0,0,0,0.3); border-radius: 10px; overflow: hidden;'>
-                        <thead>
-                            <tr style='background: linear-gradient(135deg, #667eea, #764ba2);'>
-                                <th style='padding: 15px; color: white; text-align: left;'>시나리오</th>
-                                <th style='padding: 15px; color: white; text-align: right;'>비용</th>
-                                <th style='padding: 15px; color: white; text-align: right;'>레이턴시</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr style='border-bottom: 1px solid rgba(255,255,255,0.1);'>
-                                <td style='padding: 15px; color: #10b981; font-weight: 600;'>🟢 UC1: 알려진 사이트 재사용</td>
-                                <td style='padding: 15px; color: #10b981; text-align: right; font-weight: 700;'>$0.00</td>
-                                <td style='padding: 15px; color: #9ca3af; text-align: right;'>~100ms</td>
-                            </tr>
-                            <tr style='border-bottom: 1px solid rgba(255,255,255,0.1);'>
-                                <td style='padding: 15px; color: #f59e0b; font-weight: 600;'>🟡 UC2: 사이트 구조 변경 시 복구</td>
-                                <td style='padding: 15px; color: #f59e0b; text-align: right; font-weight: 700;'>~$0.014</td>
-                                <td style='padding: 15px; color: #9ca3af; text-align: right;'>~5s</td>
-                            </tr>
-                            <tr>
-                                <td style='padding: 15px; color: #3b82f6; font-weight: 600;'>🔵 UC3: 신규 사이트 학습</td>
-                                <td style='padding: 15px; color: #3b82f6; text-align: right; font-weight: 700;'>~$0.033</td>
-                                <td style='padding: 15px; color: #9ca3af; text-align: right;'>~8s</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                """)
-
-                gr.HTML("""
-                <div style='background: linear-gradient(135deg, #10b98120 0%, #10b98130 100%);
-                            border: 2px solid #10b981; padding: 20px; border-radius: 10px; margin-top: 20px;'>
-                    <h4 style='color: #10b981; margin-bottom: 15px; text-align: center;'>💡 핵심: "Learn Once, Reuse Forever"</h4>
-                    <p style='color: #e5e7eb; text-align: center; margin: 0; font-size: 1.1em; line-height: 1.8;'>
-                        UC3로 한 번 학습($0.033)하면 → UC1으로 무한 재사용($0 × ∞회)<br>
-                        <strong style='color: #10b981;'>연간 100만 기사 기준: $30,000 → $33 (99.89% 절감)</strong>
-                    </p>
                 </div>
                 """)
 
                 gr.Markdown("---")
 
                 # ==========================================
-                # 기술 디테일 (Accordion - 개발자용)
+                # 2단계: 어떻게 동작하나? (1분)
                 # ==========================================
-                gr.Markdown("## 🔧 기술 디테일 (개발자용)")
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #667eea20 0%, #764ba230 100%);
+                            border: 3px solid #667eea; padding: 30px; border-radius: 12px; margin: 20px 0;'>
+                    <h2 style='color: #667eea; text-align: center; margin-bottom: 25px; font-size: 1.8em;'>
+                        🧠 2. Master Workflow (Supervisor Pattern)
+                    </h2>
+
+                    <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; font-family: monospace;'>
+                        <!-- START -->
+                        <div style='text-align: center; margin-bottom: 20px;'>
+                            <div style='background: #667eea; color: white; padding: 12px 25px; border-radius: 8px; display: inline-block; font-weight: 600;'>
+                                🚀 START: URL + HTML
+                            </div>
+                        </div>
+
+                        <div style='text-align: center; color: #667eea; font-size: 1.5em; margin: 10px 0;'>↓</div>
+
+                        <!-- SUPERVISOR -->
+                        <div style='text-align: center; margin-bottom: 20px;'>
+                            <div style='background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 15px 30px; border-radius: 10px; display: inline-block;'>
+                                <div style='font-weight: 700; font-size: 1.1em; margin-bottom: 8px;'>🧠 Supervisor</div>
+                                <div style='font-size: 0.85em; opacity: 0.9;'>
+                                    State 분석 → UC 자동 선택<br>
+                                    <span style='font-size: 0.85em;'>기본: Rule-based (LLM 없음)</span><br>
+                                    <span style='font-size: 0.75em; opacity: 0.8;'>선택: 3-Model Voting (GPT+Claude+Gemini)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style='text-align: center; color: #667eea; font-size: 1.5em; margin: 10px 0;'>↓</div>
+
+                        <!-- UC1, UC2, UC3 -->
+                        <div style='display: flex; justify-content: space-between; gap: 15px; margin-bottom: 20px;'>
+                            <div style='flex: 1; text-align: center;'>
+                                <div style='background: #10b981; color: white; padding: 20px 15px; border-radius: 8px;'>
+                                    <div style='font-weight: 700; font-size: 1.1em; margin-bottom: 8px;'>🟢 UC1</div>
+                                    <div style='font-size: 0.9em; margin-bottom: 8px;'>재사용</div>
+                                    <div style='font-size: 1.2em; font-weight: 700; margin: 8px 0;'>$0</div>
+                                    <div style='font-size: 0.8em; opacity: 0.9;'>~1.5s</div>
+                                </div>
+                            </div>
+                            <div style='flex: 1; text-align: center;'>
+                                <div style='background: #f59e0b; color: white; padding: 20px 15px; border-radius: 8px;'>
+                                    <div style='font-weight: 700; font-size: 1.1em; margin-bottom: 8px;'>🟡 UC2</div>
+                                    <div style='font-size: 0.9em; margin-bottom: 8px;'>복구 (Self-Healing)</div>
+                                    <div style='font-size: 1.2em; font-weight: 700; margin: 8px 0;'>~$0.002</div>
+                                    <div style='font-size: 0.8em; opacity: 0.9;'>~31.7s</div>
+                                </div>
+                            </div>
+                            <div style='flex: 1; text-align: center;'>
+                                <div style='background: #3b82f6; color: white; padding: 20px 15px; border-radius: 8px;'>
+                                    <div style='font-weight: 700; font-size: 1.1em; margin-bottom: 8px;'>🔵 UC3</div>
+                                    <div style='font-size: 0.9em; margin-bottom: 8px;'>학습 (Discovery)</div>
+                                    <div style='font-size: 1.2em; font-weight: 700; margin: 8px 0;'>$0~$0.033</div>
+                                    <div style='font-size: 0.8em; opacity: 0.9;'>5~42s</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Multi-Layer Defense -->
+                        <div style='text-align: center; margin: 20px 0;'>
+                            <div style='background: rgba(239, 68, 68, 0.2); border: 2px dashed #ef4444; padding: 15px; border-radius: 8px;'>
+                                <div style='color: #ef4444; font-weight: 600; margin-bottom: 8px;'>Multi-Layer Defense (SPOF 방지)</div>
+                                <div style='color: #e5e7eb; font-size: 0.9em;'>
+                                    UC1 실패 → (Selector 있음: UC2 | 없음: UC3) → UC1 재시도
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """)
+
+                # 3가지 핵심 가치
+                gr.HTML("""
+                <div style='margin: 30px 0;'>
+                    <h3 style='color: #667eea; text-align: center; margin-bottom: 20px; font-size: 1.4em;'>
+                        🎯 3가지 핵심 가치
+                    </h3>
+                    <div style='display: flex; gap: 20px;'>
+                        <div style='flex: 1; background: linear-gradient(135deg, #10b98120 0%, #10b98130 100%);
+                                    border: 2px solid #10b981; padding: 20px; border-radius: 10px; text-align: center;'>
+                            <div style='font-size: 2.5em; margin-bottom: 10px;'>💰</div>
+                            <h4 style='color: #10b981; margin-bottom: 10px;'>비용 효율</h4>
+                            <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8;'>
+                                UC3 학습 후<br>
+                                UC1으로 무한 재사용<br>
+                                <strong style='color: #10b981;'>$0.033 → $0 (∞회)</strong>
+                            </div>
+                        </div>
+                        <div style='flex: 1; background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+                                    border: 2px solid #667eea; padding: 20px; border-radius: 10px; text-align: center;'>
+                            <div style='font-size: 2.5em; margin-bottom: 10px;'>🛡️</div>
+                            <h4 style='color: #667eea; margin-bottom: 10px;'>안정성</h4>
+                            <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8;'>
+                                Multi-Layer Defense<br>
+                                2-Agent Consensus<br>
+                                <strong style='color: #667eea;'>459개 100% 성공</strong>
+                            </div>
+                        </div>
+                        <div style='flex: 1; background: linear-gradient(135deg, #f59e0b20 0%, #f59e0b30 100%);
+                                    border: 2px solid #f59e0b; padding: 20px; border-radius: 10px; text-align: center;'>
+                            <div style='font-size: 2.5em; margin-bottom: 10px;'>⚡</div>
+                            <h4 style='color: #f59e0b; margin-bottom: 10px;'>속도</h4>
+                            <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8;'>
+                                UC1 Rule-based<br>
+                                LLM 없이 즉시 처리<br>
+                                <strong style='color: #f59e0b;'>~1.5s</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """)
+
+                gr.Markdown("---")
+
+                # ==========================================
+                # 3단계: 각 UC 상세 설명 (섹션 기반)
+                # ==========================================
+                gr.Markdown("## 📊 3. Use Case 상세 설명")
+
+                # UC1 섹션
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #10b98120 0%, #10b98130 100%);
+                            border: 3px solid #10b981; border-radius: 12px; padding: 35px; margin: 30px 0;'>
+
+                    <!-- 헤더 -->
+                    <div style='text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #10b981;'>
+                        <h2 style='color: #10b981; margin: 0 0 15px 0; font-size: 2em; font-weight: 800;'>
+                            🟢 UC1: Quality Gate
+                        </h2>
+                        <p style='color: #10b981; font-size: 1.3em; font-weight: 600; font-style: italic; margin: 10px 0;'>
+                            "Zero Cost, Maximum Speed"
+                        </p>
+                        <div style='margin-top: 20px;'>
+                            <span style='font-size: 3em; font-weight: 900; color: #10b981;'>$0</span>
+                            <span style='font-size: 1.3em; color: #9ca3af; margin-left: 20px;'>~1.5s</span>
+                        </div>
+                    </div>
+
+                    <!-- 본문 그리드 -->
+                    <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 25px;'>
+
+                        <!-- 왼쪽: 트리거 조건 + 핵심 로직 -->
+                        <div>
+                            <!-- 트리거 조건 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #10b981; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📍 트리거 조건
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ✅ DB에 Selector 존재<br>
+                                    ✅ Quality Score ≥ 80
+                                </div>
+                            </div>
+
+                            <!-- 핵심 로직 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #10b981; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    ⚙️ 핵심 로직
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1️⃣ JSON-LD Smart Extraction:</strong> 95%+ 사이트<br>
+                                    <strong>2️⃣ CSS Selector Fallback:</strong> Trafilatura + BeautifulSoup<br>
+                                    <strong>3️⃣ 5W1H Quality 검증:</strong> Title 20%, Body 50%, Date 20%
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 오른쪽: 핵심 강점 + 다음 단계 -->
+                        <div>
+                            <!-- 핵심 강점 -->
+                            <div style='background: rgba(16,185,129,0.25); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #10b981; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    💡 핵심 강점
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    • LLM 없이 Rule-based 처리<br>
+                                    • 무한 재사용 가능 ($0)<br>
+                                    • 초고속 응답 (~100ms)
+                                </div>
+                            </div>
+
+                            <!-- 다음 단계 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #10b981; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📤 다음 단계
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ✅ <strong>성공</strong> → END<br>
+                                    ❌ <strong>실패</strong> → UC2
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- DB 작업 -->
+                    <div style='text-align: center; margin-top: 25px; padding-top: 20px; border-top: 2px solid rgba(16,185,129,0.3);'>
+                        <code style='background: rgba(0,0,0,0.6); padding: 10px 20px; border-radius: 8px;
+                                    font-size: 1.2em; color: #10b981; border: 2px solid #10b981; font-weight: 600;'>
+                            SELECT stored_selector FROM selectors
+                        </code>
+                    </div>
+                </div>
+                """)
+
+                # UC2 섹션
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #f59e0b20 0%, #f59e0b30 100%);
+                            border: 3px solid #f59e0b; border-radius: 12px; padding: 35px; margin: 30px 0;'>
+
+                    <!-- 헤더 -->
+                    <div style='text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #f59e0b;'>
+                        <h2 style='color: #f59e0b; margin: 0 0 15px 0; font-size: 2em; font-weight: 800;'>
+                            🟡 UC2: Self-Healing
+                        </h2>
+                        <p style='color: #f59e0b; font-size: 1.3em; font-weight: 600; font-style: italic; margin: 10px 0;'>
+                            "Adapt to Change"
+                        </p>
+                        <div style='margin-top: 20px;'>
+                            <span style='font-size: 3em; font-weight: 900; color: #f59e0b;'>~$0.002</span>
+                            <span style='font-size: 1.3em; color: #9ca3af; margin-left: 20px;'>~31.7s</span>
+                        </div>
+                    </div>
+
+                    <!-- 본문 그리드 -->
+                    <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 25px;'>
+
+                        <!-- 왼쪽: 트리거 조건 + 핵심 로직 -->
+                        <div>
+                            <!-- 트리거 조건 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #f59e0b; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📍 트리거 조건
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ❌ UC1 Quality < 80 (실패)<br>
+                                    ⚠️ 사이트 UI 변경 감지
+                                </div>
+                            </div>
+
+                            <!-- 핵심 로직 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #f59e0b; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    ⚙️ 핵심 로직
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1️⃣ Site-specific HTML Hints:</strong> 실시간 HTML 분석<br>
+                                    <strong>2️⃣ 2-Agent Consensus:</strong> Claude Proposer + GPT-4o Validator<br>
+                                    <strong>3️⃣ Weighted Consensus:</strong> 0.3×Claude + 0.3×GPT + 0.4×Quality
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 오른쪽: 핵심 강점 + 다음 단계 -->
+                        <div>
+                            <!-- 핵심 강점 -->
+                            <div style='background: rgba(245,158,11,0.25); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #f59e0b; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    💡 핵심 강점
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    • Site-specific HTML Hints (Consensus 0.36→0.88)<br>
+                                    • 2-Agent Consensus (Hallucination 방지)<br>
+                                    • Multi-provider Fallback (Claude↔GPT)
+                                </div>
+                            </div>
+
+                            <!-- 다음 단계 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #f59e0b; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📤 다음 단계
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ✅ <strong>성공</strong> → UPDATE DB → END<br>
+                                    ❌ <strong>실패</strong> → UC3
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- DB 작업 -->
+                    <div style='text-align: center; margin-top: 25px; padding-top: 20px; border-top: 2px solid rgba(245,158,11,0.3);'>
+                        <code style='background: rgba(0,0,0,0.6); padding: 10px 20px; border-radius: 8px;
+                                    font-size: 1.2em; color: #f59e0b; border: 2px solid #f59e0b; font-weight: 600;'>
+                            UPDATE selectors SET stored_selector = new_selector
+                        </code>
+                    </div>
+                </div>
+                """)
+
+                # UC3 섹션
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #3b82f620 0%, #3b82f630 100%);
+                            border: 3px solid #3b82f6; border-radius: 12px; padding: 35px; margin: 30px 0;'>
+
+                    <!-- 헤더 -->
+                    <div style='text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #3b82f6;'>
+                        <h2 style='color: #3b82f6; margin: 0 0 15px 0; font-size: 2em; font-weight: 800;'>
+                            🔵 UC3: Discovery
+                        </h2>
+                        <p style='color: #3b82f6; font-size: 1.3em; font-weight: 600; font-style: italic; margin: 10px 0;'>
+                            "Invest Once, Reuse Forever"
+                        </p>
+                        <div style='margin-top: 20px;'>
+                            <span style='font-size: 3em; font-weight: 900; color: #3b82f6;'>$0~$0.033</span>
+                            <span style='font-size: 1.3em; color: #9ca3af; margin-left: 20px;'>5~42s</span>
+                        </div>
+                    </div>
+
+                    <!-- 본문 그리드 -->
+                    <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 25px;'>
+
+                        <!-- 왼쪽: 트리거 조건 + 핵심 로직 -->
+                        <div>
+                            <!-- 트리거 조건 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #3b82f6; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📍 트리거 조건
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ❌ DB에 Selector 없음<br>
+                                    🆕 신규 사이트 학습
+                                </div>
+                            </div>
+
+                            <!-- 핵심 로직 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #3b82f6; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    ⚙️ 핵심 로직
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1️⃣ JSON-LD Smart:</strong> Quality ≥ 0.7 → LLM 스킵 ($0)<br>
+                                    <strong>2️⃣ Claude Discoverer:</strong> Few-Shot + DOM Analyzer<br>
+                                    <strong>3️⃣ GPT-4o Validator:</strong> 실제 HTML 테스트
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 오른쪽: 핵심 강점 + 다음 단계 -->
+                        <div>
+                            <!-- 핵심 강점 -->
+                            <div style='background: rgba(59,130,246,0.25); padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h3 style='color: #3b82f6; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    💡 핵심 강점
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    • JSON-LD Smart (95%+ 사이트, LLM 스킵)<br>
+                                    • Zero-Shot Learning (Few-Shot Examples)<br>
+                                    • UC1 Auto-Retry (데이터 수집 보장)
+                                </div>
+                            </div>
+
+                            <!-- 다음 단계 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px;'>
+                                <h3 style='color: #3b82f6; margin: 0 0 15px 0; font-size: 1.3em; font-weight: 700;'>
+                                    📤 다음 단계
+                                </h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    ✅ <strong>성공</strong> → INSERT DB → UC1 재시도<br>
+                                    ❌ <strong>실패</strong> → Graceful Failure
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- DB 작업 -->
+                    <div style='text-align: center; margin-top: 25px; padding-top: 20px; border-top: 2px solid rgba(59,130,246,0.3);'>
+                        <code style='background: rgba(0,0,0,0.6); padding: 10px 20px; border-radius: 8px;
+                                    font-size: 1.2em; color: #3b82f6; border: 2px solid #3b82f6; font-weight: 600;'>
+                            INSERT INTO selectors (site_name, stored_selector) VALUES (...)
+                        </code>
+                    </div>
+                </div>
+                """)
+
+                gr.Markdown("---")
+
+                # ==========================================
+                # 4단계: 순환 워크플로우 (넓고 상세하게)
+                # ==========================================
+                gr.Markdown("## 🔄 4. 순환 워크플로우: \"Learn Once, Reuse Forever\"")
+
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #667eea20 0%, #764ba230 100%);
+                            border: 3px solid #667eea; border-radius: 12px; padding: 40px; margin: 30px 0;'>
+
+                    <!-- 소개 -->
+                    <div style='text-align: center; margin-bottom: 40px;'>
+                        <h2 style='color: #667eea; font-size: 2.2em; font-weight: 800; margin-bottom: 15px;'>
+                            핵심 철학: "Learn Once, Reuse Forever"
+                        </h2>
+                        <p style='color: #e5e7eb; font-size: 1.2em; line-height: 1.8; max-width: 900px; margin: 0 auto;'>
+                            CrawlAgent는 <strong style='color: #3b82f6;'>한 번의 학습 비용($0.033)</strong>만 지불하면,
+                            이후 동일 사이트의 모든 크롤링은 <strong style='color: #10b981;'>$0 비용</strong>으로 영구 재사용됩니다.
+                            사이트가 변경되어도 <strong style='color: #f59e0b;'>UC2가 자동으로 복구</strong>하여 안정성을 유지합니다.
+                        </p>
+                    </div>
+
+                    <!-- 탑다운 플로우 -->
+                    <div style='max-width: 1200px; margin: 0 auto;'>
+
+                        <!-- STEP 1: 시작 -->
+                        <div style='background: rgba(0,0,0,0.3); padding: 30px; border-radius: 12px; margin-bottom: 30px;'>
+                            <div style='text-align: center;'>
+                                <div style='background: linear-gradient(135deg, #667eea, #764ba2); padding: 20px 50px; border-radius: 12px;
+                                            display: inline-block; box-shadow: 0 6px 16px rgba(102,126,234,0.5);'>
+                                    <div style='color: white; font-size: 1.8em; font-weight: 800;'>🚀 STEP 1: START</div>
+                                    <div style='color: rgba(255,255,255,0.95); font-size: 1.2em; margin-top: 10px;'>URL + HTML 입력</div>
+                                </div>
+                            </div>
+                            <div style='color: #9ca3af; text-align: center; margin-top: 20px; font-size: 1.1em; line-height: 1.8;'>
+                                사용자가 크롤링할 URL을 입력하면 시스템이 HTML을 다운로드합니다.<br>
+                                이제 Supervisor가 현재 State를 분석하여 최적의 UC를 선택합니다.
+                            </div>
+                        </div>
+
+                        <!-- Arrow -->
+                        <div style='text-align: center; color: #667eea; font-size: 3em; margin: 20px 0;'>↓</div>
+
+                        <!-- STEP 2: Supervisor -->
+                        <div style='background: rgba(0,0,0,0.3); padding: 30px; border-radius: 12px; margin-bottom: 30px;'>
+                            <div style='text-align: center;'>
+                                <div style='background: linear-gradient(135deg, #667eea30, #764ba230); padding: 20px 50px; border-radius: 12px;
+                                            border: 4px solid #667eea; display: inline-block;'>
+                                    <div style='color: #667eea; font-size: 1.8em; font-weight: 800;'>🧠 STEP 2: Supervisor</div>
+                                    <div style='color: #e5e7eb; font-size: 1.2em; margin-top: 10px;'>State 분석 → UC 자동 선택</div>
+                                    <div style='color: #9ca3af; font-size: 0.95em; margin-top: 8px;'>
+                                        기본: Rule-based (LLM 없음) | 선택: 3-Model Voting (GPT+Claude+Gemini)
+                                    </div>
+                                </div>
+                            </div>
+                            <div style='margin-top: 25px; padding: 20px; background: rgba(102,126,234,0.1); border-radius: 10px;'>
+                                <h3 style='color: #667eea; font-size: 1.3em; margin-bottom: 15px;'>📋 판단 로직</h3>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1️⃣ DB Selector 존재?</strong><br>
+                                    &nbsp;&nbsp;&nbsp;→ YES → UC1 실행 (Quality Gate)<br>
+                                    &nbsp;&nbsp;&nbsp;→ NO → UC3 실행 (Discovery)<br><br>
+                                    <strong>2️⃣ UC1 Quality < 80?</strong><br>
+                                    &nbsp;&nbsp;&nbsp;→ YES → UC2 실행 (Self-Healing)<br><br>
+                                    <strong>3️⃣ UC2/UC3 성공?</strong><br>
+                                    &nbsp;&nbsp;&nbsp;→ YES → UC1 재시도 (Selector 수정/생성 후)<br>
+                                    &nbsp;&nbsp;&nbsp;→ NO → Graceful Failure (로깅)
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Arrow -->
+                        <div style='text-align: center; color: #667eea; font-size: 3em; margin: 20px 0;'>↓</div>
+
+                        <!-- STEP 3: UC 실행 (3-way split) -->
+                        <div style='background: rgba(0,0,0,0.3); padding: 30px; border-radius: 12px; margin-bottom: 30px;'>
+                            <h3 style='color: #667eea; text-align: center; font-size: 1.8em; font-weight: 800; margin-bottom: 25px;'>
+                                STEP 3: UC 실행 (3-Way Split)
+                            </h3>
+                            <div style='display: flex; justify-content: center; gap: 25px;'>
+                                <!-- UC1 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: linear-gradient(135deg, #10b98125, #10b98135); padding: 25px 20px; border-radius: 12px;
+                                                border: 4px solid #10b981; min-height: 180px; display: flex; flex-direction: column; justify-content: center;'>
+                                        <div style='color: #10b981; font-size: 1.5em; font-weight: 800; margin-bottom: 12px;'>🟢 UC1</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; font-weight: 600; margin-bottom: 10px;'>Quality Gate</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8; margin-bottom: 12px;'>
+                                            DB Selector 재사용
+                                        </div>
+                                        <div style='font-size: 1.8em; font-weight: 900; color: #10b981;'>$0</div>
+                                        <div style='font-size: 1em; color: #9ca3af; margin-top: 5px;'>~1.5s</div>
+                                    </div>
+                                </div>
+
+                                <!-- UC2 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: linear-gradient(135deg, #f59e0b25, #f59e0b35); padding: 25px 20px; border-radius: 12px;
+                                                border: 4px solid #f59e0b; min-height: 180px; display: flex; flex-direction: column; justify-content: center;'>
+                                        <div style='color: #f59e0b; font-size: 1.5em; font-weight: 800; margin-bottom: 12px;'>🟡 UC2</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; font-weight: 600; margin-bottom: 10px;'>Self-Healing</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8; margin-bottom: 12px;'>
+                                            2-Agent Consensus
+                                        </div>
+                                        <div style='font-size: 1.8em; font-weight: 900; color: #f59e0b;'>~$0.002</div>
+                                        <div style='font-size: 1em; color: #9ca3af; margin-top: 5px;'>~31.7s</div>
+                                    </div>
+                                </div>
+
+                                <!-- UC3 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: linear-gradient(135deg, #3b82f625, #3b82f635); padding: 25px 20px; border-radius: 12px;
+                                                border: 4px solid #3b82f6; min-height: 180px; display: flex; flex-direction: column; justify-content: center;'>
+                                        <div style='color: #3b82f6; font-size: 1.5em; font-weight: 800; margin-bottom: 12px;'>🔵 UC3</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; font-weight: 600; margin-bottom: 10px;'>Discovery</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em; line-height: 1.8; margin-bottom: 12px;'>
+                                            신규 학습
+                                        </div>
+                                        <div style='font-size: 1.8em; font-weight: 900; color: #3b82f6;'>$0~$0.033</div>
+                                        <div style='font-size: 1em; color: #9ca3af; margin-top: 5px;'>5~42s</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Arrow -->
+                        <div style='text-align: center; color: #667eea; font-size: 3em; margin: 20px 0;'>↓</div>
+
+                        <!-- STEP 4: DB 저장 -->
+                        <div style='background: rgba(0,0,0,0.3); padding: 30px; border-radius: 12px; margin-bottom: 30px;'>
+                            <h3 style='color: #667eea; text-align: center; font-size: 1.8em; font-weight: 800; margin-bottom: 25px;'>
+                                STEP 4: DB 저장 & 완료
+                            </h3>
+                            <div style='display: flex; justify-content: center; gap: 25px;'>
+                                <!-- UC1 결과 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: rgba(16,185,129,0.25); padding: 20px; border-radius: 10px; border: 3px solid #10b981;'>
+                                        <div style='color: #10b981; font-size: 1.5em; font-weight: 700; margin-bottom: 8px;'>✅ END</div>
+                                        <div style='color: #e5e7eb; font-size: 1em; line-height: 1.8;'>
+                                            크롤링 완료<br>
+                                            <span style='font-size: 0.9em; color: #9ca3af;'>DB 작업 없음</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- UC2 결과 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: rgba(245,158,11,0.25); padding: 20px; border-radius: 10px; border: 3px solid #f59e0b;'>
+                                        <div style='color: #f59e0b; font-size: 1.5em; font-weight: 700; margin-bottom: 8px;'>💾 UPDATE DB</div>
+                                        <div style='color: #e5e7eb; font-size: 1em; line-height: 1.8;'>
+                                            Selector 수정<br>
+                                            <code style='font-size: 0.85em; color: #f59e0b;'>UPDATE selectors</code>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- UC3 결과 -->
+                                <div style='flex: 0 0 30%; text-align: center;'>
+                                    <div style='background: rgba(59,130,246,0.25); padding: 20px; border-radius: 10px; border: 3px solid #3b82f6;'>
+                                        <div style='color: #3b82f6; font-size: 1.5em; font-weight: 700; margin-bottom: 8px;'>💾 INSERT DB</div>
+                                        <div style='color: #e5e7eb; font-size: 1em; line-height: 1.8;'>
+                                            신규 Selector 저장<br>
+                                            <code style='font-size: 0.85em; color: #3b82f6;'>INSERT INTO selectors</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Arrow (curved back) -->
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <div style='border-top: 3px dashed #667eea; padding-top: 25px;'>
+                                <div style='color: #667eea; font-size: 2.5em; margin-bottom: 10px;'>⤴️</div>
+                                <div style='color: #667eea; font-size: 1.3em; font-weight: 600;'>순환 (Loop Back)</div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 5: 순환 -->
+                        <div style='background: linear-gradient(135deg, #10b98125, #10b98135); padding: 35px; border-radius: 12px;
+                                    border: 4px solid #10b981; box-shadow: 0 6px 16px rgba(16,185,129,0.4);'>
+                            <h3 style='color: #10b981; text-align: center; font-size: 2em; font-weight: 800; margin-bottom: 20px;'>
+                                🔁 STEP 5: 순환 - 다음 크롤링
+                            </h3>
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <div style='color: #e5e7eb; font-size: 1.2em; line-height: 2.2; text-align: center;'>
+                                    UC2/UC3가 DB에 Selector를 저장하면,<br>
+                                    <strong style='color: #10b981; font-size: 1.3em;'>다음 크롤링부터 자동으로 UC1 ($0) 실행</strong><br>
+                                    <span style='font-size: 1.1em; color: #667eea;'>💰 첫 학습 비용만 지불 → 이후 영구 재사용 (∞회)</span>
+                                </div>
+                            </div>
+
+                            <!-- 실제 예시 -->
+                            <div style='margin-top: 25px; padding: 25px; background: rgba(102,126,234,0.15); border-radius: 10px; border-left: 4px solid #667eea;'>
+                                <h4 style='color: #667eea; font-size: 1.3em; margin-bottom: 15px;'>📊 실제 예시 (Donga.com)</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1차 크롤링 (UC3 Discovery):</strong> $0.033 (신규 학습)<br>
+                                    <strong>2차 크롤링 (UC1 재사용):</strong> $0 (DB Selector 사용)<br>
+                                    <strong>3차 크롤링 (UC1 재사용):</strong> $0<br>
+                                    <strong>...</strong><br>
+                                    <strong style='color: #10b981;'>∞차 크롤링:</strong> <strong style='color: #10b981; font-size: 1.2em;'>$0 (영구 무료)</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- 핵심 가치 요약 -->
+                    <div style='margin-top: 40px; padding: 30px; background: rgba(102,126,234,0.1); border-radius: 12px; border: 2px solid #667eea;'>
+                        <h3 style='color: #667eea; text-align: center; font-size: 1.6em; font-weight: 800; margin-bottom: 25px;'>
+                            🎯 순환 워크플로우의 3대 핵심 가치
+                        </h3>
+                        <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px;'>
+                            <div style='text-align: center; padding: 20px; background: rgba(16,185,129,0.15); border-radius: 10px; border: 2px solid #10b981;'>
+                                <div style='font-size: 2.5em; margin-bottom: 12px;'>💰</div>
+                                <h4 style='color: #10b981; font-size: 1.3em; margin-bottom: 10px;'>비용 효율</h4>
+                                <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                    UC3 한 번 학습 ($0.033)<br>
+                                    →<br>
+                                    UC1 영구 재사용 ($0 × ∞회)
+                                </div>
+                            </div>
+                            <div style='text-align: center; padding: 20px; background: rgba(245,158,11,0.15); border-radius: 10px; border: 2px solid #f59e0b;'>
+                                <div style='font-size: 2.5em; margin-bottom: 12px;'>🔄</div>
+                                <h4 style='color: #f59e0b; font-size: 1.3em; margin-bottom: 10px;'>자동 복구</h4>
+                                <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                    사이트 UI 변경 감지<br>
+                                    →<br>
+                                    UC2가 자동 수정 (~$0.014)
+                                </div>
+                            </div>
+                            <div style='text-align: center; padding: 20px; background: rgba(102,126,234,0.15); border-radius: 10px; border: 2px solid #667eea;'>
+                                <div style='font-size: 2.5em; margin-bottom: 12px;'>🛡️</div>
+                                <h4 style='color: #667eea; font-size: 1.3em; margin-bottom: 10px;'>SPOF 방지</h4>
+                                <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                    4-Layer Fallback<br>
+                                    →<br>
+                                    UC1 → UC2 → UC3 → Fail
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """)
+
+                gr.Markdown("---")
+
+                # ==========================================
+                # 5단계: SPOF 방지 상세 설명
+                # ==========================================
+                gr.Markdown("## 🛡️ 5. SPOF 방지: 4-Layer Fallback 구조")
+
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #667eea20 0%, #764ba230 100%);
+                            border: 3px solid #667eea; border-radius: 12px; padding: 40px; margin: 30px 0;'>
+
+                    <!-- 소개 -->
+                    <div style='text-align: center; margin-bottom: 40px;'>
+                        <h2 style='color: #667eea; font-size: 2.2em; font-weight: 800; margin-bottom: 15px;'>
+                            Single Point of Failure 제거
+                        </h2>
+                        <p style='color: #e5e7eb; font-size: 1.2em; line-height: 1.8; max-width: 900px; margin: 0 auto;'>
+                            단일 추출 방법에 의존하지 않고, <strong style='color: #f59e0b;'>4단계 Fallback 체계</strong>로
+                            어떤 상황에서도 크롤링이 실패하지 않도록 설계되었습니다.
+                        </p>
+                    </div>
+
+                    <!-- 4-Layer Fallback 상세 -->
+                    <div style='max-width: 1100px; margin: 0 auto;'>
+
+                        <!-- Layer 1: UC1 내부 Fallback -->
+                        <div style='background: rgba(16,185,129,0.15); padding: 30px; border-radius: 12px; margin-bottom: 25px; border: 3px solid #10b981;'>
+                            <h3 style='color: #10b981; font-size: 1.6em; margin-bottom: 20px; font-weight: 700;'>
+                                🟢 Layer 1: UC1 내부 다층 방어 (BeautifulSoup Selector)
+                            </h3>
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong style='color: #10b981;'>단계 1:</strong> DB에 저장된 CSS Selector로 추출 (BeautifulSoup)<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>성공 시:</strong> 즉시 반환 ($0, ~100ms)<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>실패 시:</strong> 단계 2로 이동<br><br>
+
+                                    <strong style='color: #10b981;'>단계 2:</strong> Meta Tag Fallback (og:title, article:published_time 등)<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>성공 시:</strong> 반환<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>실패 시:</strong> 단계 3으로 이동<br><br>
+
+                                    <strong style='color: #10b981;'>단계 3:</strong> JSON-LD Structured Data 추출<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>성공 시:</strong> 반환<br>
+                                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <strong>모두 실패:</strong> Quality Score < 80 → UC2 트리거
+                                </div>
+                            </div>
+                            <div style='margin-top: 20px; padding: 15px; background: rgba(16,185,129,0.2); border-radius: 8px;'>
+                                <strong style='color: #10b981; font-size: 1.1em;'>💡 핵심:</strong>
+                                <span style='color: #e5e7eb; font-size: 1.05em;'>
+                                    UC1 내부에서만 3번의 재시도 기회 → LLM 없이 SPOF 방지
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Layer 2: UC2 Self-Healing -->
+                        <div style='background: rgba(245,158,11,0.15); padding: 30px; border-radius: 12px; margin-bottom: 25px; border: 3px solid #f59e0b;'>
+                            <h3 style='color: #f59e0b; font-size: 1.6em; margin-bottom: 20px; font-weight: 700;'>
+                                🟡 Layer 2: UC2 Self-Healing (2-Agent Consensus)
+                            </h3>
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong style='color: #f59e0b;'>트리거:</strong> UC1 Quality Score < 80 (사이트 변경 감지)<br><br>
+
+                                    <strong style='color: #f59e0b;'>동작:</strong><br>
+                                    &nbsp;&nbsp;1️⃣ <strong>Claude Sonnet 4.5</strong>가 HTML 분석 + Few-Shot 학습 (5개 유사 사이트)<br>
+                                    &nbsp;&nbsp;2️⃣ <strong>GPT-4o</strong>가 독립적으로 검증<br>
+                                    &nbsp;&nbsp;3️⃣ <strong>Consensus Score ≥ 0.5</strong> → 새로운 Selector DB UPDATE<br>
+                                    &nbsp;&nbsp;4️⃣ UPDATE 완료 → <strong>UC1 재실행</strong> (자동 복구)<br><br>
+
+                                    <strong style='color: #f59e0b;'>결과:</strong> 사이트 변경에 자동 적응 → 서비스 중단 없음
+                                </div>
+                            </div>
+                            <div style='margin-top: 20px; padding: 15px; background: rgba(245,158,11,0.2); border-radius: 8px;'>
+                                <strong style='color: #f59e0b; font-size: 1.1em;'>💡 핵심:</strong>
+                                <span style='color: #e5e7eb; font-size: 1.05em;'>
+                                    2개 회사 LLM의 Cross-Validation → Hallucination 방지 + 안정성 확보
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Layer 3: UC3 Discovery -->
+                        <div style='background: rgba(59,130,246,0.15); padding: 30px; border-radius: 12px; margin-bottom: 25px; border: 3px solid #3b82f6;'>
+                            <h3 style='color: #3b82f6; font-size: 1.6em; margin-bottom: 20px; font-weight: 700;'>
+                                🔵 Layer 3: UC3 Discovery (신규 사이트 학습)
+                            </h3>
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong style='color: #3b82f6;'>트리거:</strong> DB에 Selector 없음 (신규 사이트)<br><br>
+
+                                    <strong style='color: #3b82f6;'>동작:</strong><br>
+                                    &nbsp;&nbsp;1️⃣ <strong>JSON-LD 우선 추출</strong> (Quality ≥ 0.7 시 LLM 스킵!)<br>
+                                    &nbsp;&nbsp;2️⃣ LLM 필요 시: <strong>Claude Sonnet 4.5</strong> HTML 분석<br>
+                                    &nbsp;&nbsp;3️⃣ <strong>GPT-4o</strong> 독립 검증<br>
+                                    &nbsp;&nbsp;4️⃣ <strong>Consensus Score ≥ 0.55</strong> → Selector DB INSERT<br>
+                                    &nbsp;&nbsp;5️⃣ INSERT 완료 → <strong>다음 크롤링부터 UC1 ($0)</strong><br><br>
+
+                                    <strong style='color: #3b82f6;'>결과:</strong> 신규 사이트도 자동 학습 → 수동 설정 불필요
+                                </div>
+                            </div>
+                            <div style='margin-top: 20px; padding: 15px; background: rgba(59,130,246,0.2); border-radius: 8px;'>
+                                <strong style='color: #3b82f6; font-size: 1.1em;'>💡 핵심:</strong>
+                                <span style='color: #e5e7eb; font-size: 1.05em;'>
+                                    JSON-LD 최적화 (~70% LLM 스킵) + 엄격한 검증 (0.55) → 품질과 비용 균형
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Layer 4: Graceful Failure -->
+                        <div style='background: rgba(239,68,68,0.15); padding: 30px; border-radius: 12px; border: 3px solid #ef4444;'>
+                            <h3 style='color: #ef4444; font-size: 1.6em; margin-bottom: 20px; font-weight: 700;'>
+                                🔴 Layer 4: Graceful Failure (MAX_RETRIES)
+                            </h3>
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong style='color: #ef4444;'>트리거:</strong> UC1 → UC2 → UC3 모두 실패 (또는 Loop Detection)<br><br>
+
+                                    <strong style='color: #ef4444;'>동작:</strong><br>
+                                    &nbsp;&nbsp;1️⃣ <strong>MAX_RETRIES = 3</strong> 초과 시 자동 종료<br>
+                                    &nbsp;&nbsp;2️⃣ <strong>Loop Detection:</strong> UC1 연속 3회 실패 → 강제 종료<br>
+                                    &nbsp;&nbsp;3️⃣ <strong>에러 로그 저장</strong> → 수동 확인 필요<br>
+                                    &nbsp;&nbsp;4️⃣ <strong>시스템 안정성 유지</strong> → 무한 루프 방지<br><br>
+
+                                    <strong style='color: #ef4444;'>결과:</strong> 예외 상황에서도 시스템 중단 없음
+                                </div>
+                            </div>
+                            <div style='margin-top: 20px; padding: 15px; background: rgba(239,68,68,0.2); border-radius: 8px;'>
+                                <strong style='color: #ef4444; font-size: 1.1em;'>💡 핵심:</strong>
+                                <span style='color: #e5e7eb; font-size: 1.05em;'>
+                                    무한 루프 방지 + 명확한 에러 메시지 → 운영 안정성
+                                </span>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- 실제 검증 결과 -->
+                    <div style='margin-top: 40px; padding: 30px; background: rgba(16,185,129,0.1); border-radius: 12px; border: 2px solid #10b981;'>
+                        <h3 style='color: #10b981; text-align: center; font-size: 1.6em; font-weight: 800; margin-bottom: 25px;'>
+                            ✅ 실제 검증 결과 (459개 크롤링)
+                        </h3>
+                        <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 25px;'>
+                            <div style='text-align: center; padding: 20px; background: rgba(16,185,129,0.15); border-radius: 10px;'>
+                                <div style='font-size: 2.5em; margin-bottom: 12px;'>💯</div>
+                                <h4 style='color: #10b981; font-size: 1.3em; margin-bottom: 10px;'>성공률</h4>
+                                <div style='color: #e5e7eb; font-size: 2em; font-weight: 800;'>100%</div>
+                                <div style='color: #9ca3af; font-size: 1em; margin-top: 8px;'>459개 중 459개 성공</div>
+                            </div>
+                            <div style='text-align: center; padding: 20px; background: rgba(102,126,234,0.15); border-radius: 10px;'>
+                                <div style='font-size: 2.5em; margin-bottom: 12px;'>🔄</div>
+                                <h4 style='color: #667eea; font-size: 1.3em; margin-bottom: 10px;'>UC 분포</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 1.8;'>
+                                    UC1: 대부분 ($0)<br>
+                                    UC2: 변경 감지 시 (~$0.014)<br>
+                                    UC3: 신규 사이트 (~$0.033)
+                                </div>
+                            </div>
+                        </div>
+                        <div style='margin-top: 25px; padding: 20px; background: rgba(102,126,234,0.1); border-radius: 10px; text-align: center;'>
+                            <strong style='color: #667eea; font-size: 1.2em;'>📊 출처:</strong>
+                            <span style='color: #e5e7eb; font-size: 1.1em;'>
+                                PostgreSQL <code style='background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px;'>crawl_results</code> 테이블 (459 rows)
+                            </span>
+                        </div>
+                    </div>
+
+                </div>
+                """)
+
+                gr.Markdown("---")
+
+                # ==========================================
+                # 6단계: 실시간 vs 자동화 워크플로우
+                # ==========================================
+                gr.Markdown("## 🔀 6. 두 가지 워크플로우: 실시간 검증 → 대량 자동화")
+
+                gr.HTML("""
+                <div style='background: linear-gradient(135deg, #667eea20 0%, #764ba230 100%);
+                            border: 3px solid #667eea; border-radius: 12px; padding: 40px; margin: 30px 0;'>
+
+                    <!-- 소개 -->
+                    <div style='text-align: center; margin-bottom: 40px;'>
+                        <h2 style='color: #667eea; font-size: 2.2em; font-weight: 800; margin-bottom: 15px;'>
+                            "실시간으로 검증하고, 자동화로 확장한다"
+                        </h2>
+                        <p style='color: #e5e7eb; font-size: 1.2em; line-height: 1.8; max-width: 1000px; margin: 0 auto;'>
+                            CrawlAgent는 <strong style='color: #10b981;'>실시간 워크플로우</strong>로 크롤링 안정성을 먼저 검증한 후,
+                            검증된 시스템을 <strong style='color: #3b82f6;'>Scrapy 기반 자동화</strong>로 확장하여 대량 수집을 수행합니다.
+                        </p>
+                    </div>
+
+                    <!-- 두 워크플로우 비교 -->
+                    <div style='max-width: 1200px; margin: 0 auto;'>
+
+                        <!-- Workflow 1: 실시간 검증 -->
+                        <div style='background: rgba(16,185,129,0.15); padding: 35px; border-radius: 12px; margin-bottom: 30px; border: 3px solid #10b981;'>
+                            <h3 style='color: #10b981; font-size: 1.8em; margin-bottom: 25px; font-weight: 800; text-align: center;'>
+                                🟢 Workflow 1: 실시간 검증 (현재 PoC)
+                            </h3>
+
+                            <!-- 목적 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h4 style='color: #10b981; font-size: 1.3em; margin-bottom: 15px;'>🎯 목적</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2;'>
+                                    <strong style='color: #10b981;'>Master Workflow의 안정성을 실시간으로 검증</strong><br>
+                                    → Gradio UI에서 단일 URL 입력 → UC1/UC2/UC3 자동 판단 → 결과 즉시 확인<br>
+                                    → <strong>459개 실제 크롤링 100% 성공</strong> 검증 완료
+                                </div>
+                            </div>
+
+                            <!-- 기술 스택 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h4 style='color: #10b981; font-size: 1.3em; margin-bottom: 15px;'>🛠️ 기술 스택</h4>
+                                <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;'>
+                                    <div>
+                                        <div style='color: #10b981; font-weight: 600; margin-bottom: 10px;'>UI & 실행</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                            • <strong>Gradio:</strong> 웹 UI<br>
+                                            • <strong>LangGraph:</strong> Supervisor Pattern<br>
+                                            • <strong>Python requests:</strong> HTML 다운로드
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style='color: #10b981; font-weight: 600; margin-bottom: 10px;'>파싱 & LLM</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                            • <strong>JSON-LD + Trafilatura:</strong> Smart Extraction<br>
+                                            • <strong>BeautifulSoup:</strong> CSS Selector Fallback<br>
+                                            • <strong>Claude + GPT-4o:</strong> 2-Agent Consensus
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 흐름 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <h4 style='color: #10b981; font-size: 1.3em; margin-bottom: 15px;'>🔄 실행 흐름</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong>1️⃣</strong> 사용자가 Gradio UI에서 URL 입력<br>
+                                    <strong>2️⃣</strong> Master Workflow 실행 (Supervisor → UC1/UC2/UC3)<br>
+                                    <strong>3️⃣</strong> JSON-LD Smart Extraction 우선 → CSS Selector Fallback<br>
+                                    <strong>4️⃣</strong> 5W1H Quality 검증 (Title 20%, Body 50%, Date 20%)<br>
+                                    <strong>5️⃣</strong> PostgreSQL DB에 저장 (crawl_results 테이블)
+                                </div>
+                            </div>
+
+                            <!-- 검증 결과 -->
+                            <div style='margin-top: 25px; padding: 20px; background: rgba(16,185,129,0.2); border-radius: 10px; text-align: center;'>
+                                <strong style='color: #10b981; font-size: 1.3em;'>✅ 검증 완료:</strong>
+                                <span style='color: #e5e7eb; font-size: 1.2em;'>
+                                    459개 실제 크롤링 → 100% 성공 → <strong style='color: #10b981;'>대량 자동화 준비 완료</strong>
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Arrow -->
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <div style='color: #667eea; font-size: 2.5em; margin-bottom: 10px;'>⬇️</div>
+                            <div style='color: #667eea; font-size: 1.4em; font-weight: 700;'>실시간 검증 완료 → 자동화 확장</div>
+                        </div>
+
+                        <!-- Workflow 2: 자동화 확장 -->
+                        <div style='background: rgba(59,130,246,0.15); padding: 35px; border-radius: 12px; border: 3px solid #3b82f6;'>
+                            <h3 style='color: #3b82f6; font-size: 1.8em; margin-bottom: 25px; font-weight: 800; text-align: center;'>
+                                🔵 Workflow 2: 대량 자동화 (Scrapy 기반)
+                            </h3>
+
+                            <!-- 목적 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h4 style='color: #3b82f6; font-size: 1.3em; margin-bottom: 15px;'>🎯 목적</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2;'>
+                                    <strong style='color: #3b82f6;'>검증된 Master Workflow를 Scrapy로 확장하여 대량 수집</strong><br>
+                                    → APScheduler로 매일 자동 실행 (00:30)<br>
+                                    → 카테고리별 URL 수집 → Master Workflow로 기사 추출<br>
+                                    → <strong>무인 자동화 운영</strong>
+                                </div>
+                            </div>
+
+                            <!-- 기술 스택 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h4 style='color: #3b82f6; font-size: 1.3em; margin-bottom: 15px;'>🛠️ 기술 스택</h4>
+                                <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;'>
+                                    <div>
+                                        <div style='color: #3b82f6; font-weight: 600; margin-bottom: 10px;'>자동화 & 스케줄링</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                            • <strong>Scrapy:</strong> 대량 URL 수집<br>
+                                            • <strong>APScheduler:</strong> 일일 자동 실행<br>
+                                            • <strong>Docker:</strong> PostgreSQL DB
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style='color: #3b82f6; font-weight: 600; margin-bottom: 10px;'>크롤링 엔진 (재사용)</div>
+                                        <div style='color: #e5e7eb; font-size: 1.05em; line-height: 1.8;'>
+                                            • <strong>Master Workflow:</strong> UC1/UC2/UC3<br>
+                                            • <strong>BeautifulSoup:</strong> 동일한 Selector<br>
+                                            • <strong>LLM:</strong> 동일한 2-Agent
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 흐름 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px; margin-bottom: 20px;'>
+                                <h4 style='color: #3b82f6; font-size: 1.3em; margin-bottom: 15px;'>🔄 2-Stage 실행 흐름</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2.2;'>
+                                    <strong style='color: #3b82f6;'>Stage 1: URL 수집 (Scrapy)</strong><br>
+                                    &nbsp;&nbsp;1️⃣ 카테고리 리스트 페이지 크롤링 (정치, 경제, 사회, 국제 등)<br>
+                                    &nbsp;&nbsp;2️⃣ 어제 날짜 기사 URL만 필터링 (Incremental Crawling)<br>
+                                    &nbsp;&nbsp;3️⃣ 수집된 URL 리스트 → Stage 2로 전달<br><br>
+
+                                    <strong style='color: #3b82f6;'>Stage 2: 기사 추출 (Master Workflow)</strong><br>
+                                    &nbsp;&nbsp;4️⃣ 각 URL에 대해 <strong>Master Workflow 실행</strong> (UC1/UC2/UC3)<br>
+                                    &nbsp;&nbsp;5️⃣ BeautifulSoup + CSS Selector로 기사 추출<br>
+                                    &nbsp;&nbsp;6️⃣ PostgreSQL DB 저장 (검증된 데이터만)<br>
+                                    &nbsp;&nbsp;7️⃣ 다음 URL 처리 (비동기 병렬 처리)
+                                </div>
+                            </div>
+
+                            <!-- 스케줄 -->
+                            <div style='background: rgba(0,0,0,0.3); padding: 25px; border-radius: 10px;'>
+                                <h4 style='color: #3b82f6; font-size: 1.3em; margin-bottom: 15px;'>⏰ 자동 스케줄</h4>
+                                <div style='color: #e5e7eb; font-size: 1.1em; line-height: 2;'>
+                                    <strong>실행 시간:</strong> 매일 00:30 (자정 이후 모든 기사 발행 완료 대기)<br>
+                                    <strong>수집 대상:</strong> 어제 날짜 기사 (Incremental)<br>
+                                    <strong>카테고리:</strong> politics, economy, society, international<br>
+                                    <strong>예상 소요:</strong> ~30분 (수백 개 기사, 비동기 처리)
+                                </div>
+                            </div>
+
+                            <!-- 장점 -->
+                            <div style='margin-top: 25px; padding: 20px; background: rgba(59,130,246,0.2); border-radius: 10px;'>
+                                <h4 style='color: #3b82f6; font-size: 1.2em; margin-bottom: 15px; text-align: center;'>💡 핵심 장점</h4>
+                                <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;'>
+                                    <div style='text-align: center;'>
+                                        <div style='font-size: 2em; margin-bottom: 8px;'>🔄</div>
+                                        <div style='color: #3b82f6; font-weight: 600; margin-bottom: 5px;'>재사용성</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em;'>검증된 Master Workflow<br>그대로 사용</div>
+                                    </div>
+                                    <div style='text-align: center;'>
+                                        <div style='font-size: 2em; margin-bottom: 8px;'>⚡</div>
+                                        <div style='color: #3b82f6; font-weight: 600; margin-bottom: 5px;'>확장성</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em;'>Scrapy 비동기 처리<br>대량 URL 병렬 수집</div>
+                                    </div>
+                                    <div style='text-align: center;'>
+                                        <div style='font-size: 2em; margin-bottom: 8px;'>🤖</div>
+                                        <div style='color: #3b82f6; font-weight: 600; margin-bottom: 5px;'>무인 운영</div>
+                                        <div style='color: #e5e7eb; font-size: 0.95em;'>APScheduler 자동화<br>관리 불필요</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- 핵심 메시지 -->
+                    <div style='margin-top: 40px; padding: 30px; background: linear-gradient(135deg, #667eea30, #764ba230); border-radius: 12px; border: 3px solid #667eea;'>
+                        <h3 style='color: #667eea; text-align: center; font-size: 1.8em; font-weight: 800; margin-bottom: 20px;'>
+                            🎯 핵심 메시지
+                        </h3>
+                        <div style='color: #e5e7eb; font-size: 1.2em; line-height: 2; text-align: center; max-width: 1000px; margin: 0 auto;'>
+                            <strong style='color: #10b981;'>실시간 워크플로우</strong>로 <strong>459개 크롤링 100% 성공</strong>을 먼저 검증하고,<br>
+                            검증된 시스템을 <strong style='color: #3b82f6;'>Scrapy 자동화</strong>로 확장하여 <strong>대량 무인 수집</strong>을 수행합니다.<br><br>
+                            <span style='font-size: 1.1em; color: #667eea;'>
+                                💡 "검증 없는 자동화는 위험하다. 먼저 검증하고, 그 다음 확장한다."
+                            </span>
+                        </div>
+                    </div>
+
+                </div>
+                """)
+
+                gr.Markdown("---")
+
+                # ==========================================
+                # 7단계: 기술 디테일 (접기 가능) - 선택적
+                # ==========================================
+                gr.Markdown("## 🔧 7. 기술 디테일 (선택적)")
 
                 with gr.Accordion("🟢 UC1: Quality Gate - 상세 설명", open=False):
-                    gr.Markdown("""
-### 트리거 조건
-- ✅ DB에 Selector 존재
-- ✅ Quality Score ≥ 80
+                    gr.HTML("""
+                    <div style='background: linear-gradient(135deg, #10b98120 0%, #10b98130 100%);
+                                border-left: 4px solid #10b981; padding: 25px; border-radius: 12px;'>
+                        <div style='background: linear-gradient(135deg, #10b98130 0%, #10b98120 100%);
+                                    border: 2px solid #10b981; padding: 20px; border-radius: 12px; margin-bottom: 20px;'>
+                            <div style='font-size: 1.3em; color: #10b981; font-weight: 700; margin-bottom: 10px; text-align: center;'>
+                                💡 UC1 철학: "Zero Cost, Maximum Speed"
+                            </div>
+                            <p style='color: #e5e7eb; line-height: 1.8; text-align: center; margin: 0;'>
+                                학습된 Selector를 재사용하여 LLM 없이 $0 비용과 100ms 속도로 크롤링합니다
+                            </p>
+                        </div>
 
-### 핵심 로직
-1. **Trafilatura**: Body 추출 (boilerplate 제거)
-2. **BeautifulSoup**: Title/Date 추출 (CSS Selector)
-3. **Meta Tag Fallback**: og:title, article:published_time
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-bottom: 15px;'>
+                            <h4 style='color: #10b981; margin-bottom: 10px;'>📊 작동 원리</h4>
+                            <ol style='color: #e5e7eb; line-height: 2; margin-left: 20px;'>
+                                <li><strong>PostgreSQL SELECT:</strong> stored_selector 조회</li>
+                                <li><strong>CSS Selector 파싱:</strong> BeautifulSoup으로 HTML 추출 (LLM 없음)</li>
+                                <li><strong>Quality 계산:</strong> JSON-LD + 필수 필드 검증</li>
+                            </ol>
+                        </div>
 
-### 품질 계산식
-```python
-quality = (
-    title_quality * 0.20 +  # 20%
-    body_quality * 0.50 +   # 50%
-    date_quality * 0.20 +   # 20%
-    author_quality * 0.05 + # 5%
-    category_quality * 0.05 # 5%
-)
-```
-
-### 코드 위치
-- [`src/workflow/uc1_validation.py`](../src/workflow/uc1_validation.py)
-- [`src/workflow/master_crawl_workflow.py:848-1066`](../src/workflow/master_crawl_workflow.py#L848-L1066)
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px;'>
+                            <h4 style='color: #10b981; margin-bottom: 10px;'>💡 Quality Score 계산식</h4>
+                            <code style='background: rgba(0,0,0,0.3); padding: 10px 15px; border-radius: 4px; display: block; color: #10b981;'>
+                            quality = (title_exists × 25) + (content_exists × 25) + (date_exists × 25) + (author_exists × 25)
+                            </code>
+                            <p style='color: #e5e7eb; margin-top: 10px;'>
+                                <strong>임계값 80:</strong> 4개 필드 중 3개 이상 존재 시 신뢰 가능
+                            </p>
+                        </div>
+                    </div>
                     """)
 
                 with gr.Accordion("🟡 UC2: Self-Healing - 상세 설명", open=False):
-                    gr.Markdown("""
-### 트리거 조건
-- ❌ UC1 Quality < 80 (실패)
-- ⚠️ 사이트 UI 변경 감지
+                    gr.HTML("""
+                    <div style='background: linear-gradient(135deg, #f59e0b20 0%, #f59e0b30 100%);
+                                border-left: 4px solid #f59e0b; padding: 25px; border-radius: 12px;'>
+                        <div style='background: linear-gradient(135deg, #f59e0b30 0%, #f59e0b20 100%);
+                                    border: 2px solid #f59e0b; padding: 20px; border-radius: 12px; margin-bottom: 20px;'>
+                            <div style='font-size: 1.3em; color: #f59e0b; font-weight: 700; margin-bottom: 10px; text-align: center;'>
+                                💡 UC2 철학: "Adapt to Change, Maintain Quality"
+                            </div>
+                            <p style='color: #e5e7eb; line-height: 1.8; text-align: center; margin: 0;'>
+                                사이트 UI가 변경되어도 자동으로 적응하여 크롤링 품질을 유지합니다
+                            </p>
+                        </div>
 
-### 핵심 로직
-1. **Few-Shot Learning**: DB에서 유사 사이트 성공 Selector 5개 조회
-2. **Claude Sonnet 4.5 (Proposer)**: 새로운 Selector 제안
-3. **GPT-4o (Validator)**: 제안된 Selector 검증
-4. **Weighted Consensus**: 0.3×proposer + 0.3×validator + 0.4×quality
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-bottom: 15px;'>
+                            <h4 style='color: #f59e0b; margin-bottom: 10px;'>🔧 작동 원리</h4>
+                            <ol style='color: #e5e7eb; line-height: 2; margin-left: 20px;'>
+                                <li><strong>Broken Selector 감지:</strong> UC1 Quality < 80 (사이트 UI 변경)</li>
+                                <li><strong>2-Agent Consensus:</strong> Claude Sonnet 4.5 (Proposer) + GPT-4o (Validator)</li>
+                                <li><strong>PostgreSQL UPDATE:</strong> 수정된 Selector 저장</li>
+                            </ol>
+                        </div>
 
-### Consensus 임계값
-- **High Threshold (0.75)**: 자동 승인
-- **Medium Threshold (0.50)**: Human Review 트리거
-
-### 코드 위치
-- [`src/workflow/uc2_hitl.py`](../src/workflow/uc2_hitl.py)
-- **Site-specific Hints**: [`uc2_hitl.py:172-195`](../src/workflow/uc2_hitl.py#L172-L195)
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px;'>
+                            <h4 style='color: #f59e0b; margin-bottom: 10px;'>🤝 Consensus 계산식</h4>
+                            <code style='background: rgba(0,0,0,0.3); padding: 10px 15px; border-radius: 4px; display: block; color: #10b981;'>
+                            consensus = 0.3×proposer + 0.3×validator + 0.4×quality (임계값: 0.5)
+                            </code>
+                            <p style='color: #e5e7eb; margin-top: 10px;'>
+                                <strong>Few-Shot Learning:</strong> 유사 사이트의 성공 Selector 패턴 학습
+                            </p>
+                        </div>
+                    </div>
                     """)
 
                 with gr.Accordion("🔵 UC3: Discovery - 상세 설명", open=False):
-                    gr.Markdown("""
-### 트리거 조건
-- ❌ DB에 Selector 없음
-- 🆕 신규 사이트 학습
+                    gr.HTML("""
+                    <div style='background: linear-gradient(135deg, #3b82f620 0%, #3b82f630 100%);
+                                border-left: 4px solid #3b82f6; padding: 25px; border-radius: 12px;'>
+                        <div style='background: linear-gradient(135deg, #3b82f630 0%, #3b82f620 100%);
+                                    border: 2px solid #3b82f6; padding: 20px; border-radius: 12px; margin-bottom: 20px;'>
+                            <div style='font-size: 1.3em; color: #3b82f6; font-weight: 700; margin-bottom: 10px; text-align: center;'>
+                                💡 UC3 철학: "Invest Once, Reuse Forever"
+                            </div>
+                            <p style='color: #e5e7eb; line-height: 1.8; text-align: center; margin: 0;'>
+                                새 사이트 학습 시 초기 비용을 투자하면 이후 모든 크롤링은 $0로 자동화됩니다
+                            </p>
+                        </div>
 
-### 핵심 로직
-1. **JSON-LD 우선 전략**: Quality ≥ 0.7 → LLM 스킵! (~70% 사이트)
-2. **Claude Sonnet 4.5 (Discoverer)**: HTML 구조 분석 + Selector 제안
-3. **GPT-4o (Validator)**: 검증
-4. **UC1 Auto-Retry**: Discovery 완료 후 자동으로 UC1 재시도
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-bottom: 15px;'>
+                            <h4 style='color: #3b82f6; margin-bottom: 10px;'>🔍 작동 원리</h4>
+                            <ol style='color: #e5e7eb; line-height: 2; margin-left: 20px;'>
+                                <li><strong>Selector 없음 감지:</strong> 신규 사이트</li>
+                                <li><strong>JSON-LD 최적화:</strong> Quality ≥ 0.7 → LLM 스킵!</li>
+                                <li><strong>2-Agent Consensus:</strong> Claude Sonnet 4.5 + GPT-4o</li>
+                                <li><strong>PostgreSQL INSERT:</strong> 학습된 Selector 저장</li>
+                            </ol>
+                        </div>
 
-### JSON-LD 최적화
-```python
-json_ld = extract_json_ld(html)
-if json_ld.quality >= 0.7:  # 70점 이상
-    title = json_ld["headline"]
-    body = json_ld["articleBody"]
-    date = json_ld["datePublished"]
-    # LLM 호출 SKIP → 비용 $0
-```
-
-### 코드 위치
-- [`src/workflow/uc3_new_site.py`](../src/workflow/uc3_new_site.py)
-- **UC1 Auto-Retry**: [`master_crawl_workflow.py:789-823`](../src/workflow/master_crawl_workflow.py#L789-L823)
+                        <div style='background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px;'>
+                            <h4 style='color: #3b82f6; margin-bottom: 10px;'>🚀 JSON-LD 최적화</h4>
+                            <p style='color: #e5e7eb; line-height: 1.8;'>
+                                <strong>효과:</strong> ~70% 사이트가 JSON-LD 보유 → LLM 비용 절감<br>
+                                <strong>임계값 0.55:</strong> UC2(0.5)보다 10% 엄격 (신규 학습의 중요성)
+                            </p>
+                        </div>
+                    </div>
                     """)
 
             # ============================================
-            # 탭4: 검증 데이터
+            # 탭3: 검증 데이터
             # ============================================
             with gr.Tab("📊 검증 데이터"):
                 gr.Markdown("## 8개 SSR 사이트 실제 검증 결과")
@@ -1636,6 +2571,11 @@ if json_ld.quality >= 0.7:  # 70점 이상
                     interactive=False,
                 )
 
+                with gr.Row():
+                    validation_csv_export_btn = gr.Button("📥 CSV 내보내기", variant="secondary", size="sm")
+
+                validation_csv_download = gr.File(label="CSV 다운로드", visible=False)
+
                 gr.Markdown(
                     """
                     ---
@@ -1671,6 +2611,23 @@ if json_ld.quality >= 0.7:  # 70점 이상
                 refresh_validation_btn.click(
                     fn=get_validation_data,
                     outputs=[summary_output, site_table],
+                )
+
+                def export_validation_csv_handler(df: pd.DataFrame):
+                    """검증 데이터 CSV 내보내기 핸들러"""
+                    try:
+                        if df is None or (hasattr(df, 'empty') and df.empty):
+                            return None
+                        file_path = export_to_csv(df)
+                        return file_path
+                    except Exception as e:
+                        logger.error(f"검증 데이터 CSV 내보내기 실패: {e}")
+                        return None
+
+                validation_csv_export_btn.click(
+                    fn=export_validation_csv_handler,
+                    inputs=site_table,
+                    outputs=validation_csv_download,
                 )
 
             # ============================================

@@ -12,14 +12,15 @@ UC1 (Quality Validation): LLM 없음 (규칙 기반)
   - 품질 검증만 수행
 
 UC2 (Self-Healing): 2-Agent Consensus
-  - Agent 1: GPT-4o-mini (Proposer) - CSS Selector 제안
-  - Agent 2: Gemini-2.0-flash (Validator) - Selector 검증
-  - Weighted Consensus: GPT 30% + Gemini 30% + Extraction 40%
-  - Threshold: 0.6
+  - Agent 1: Claude Sonnet 4.5 (Proposer) - CSS Selector 제안
+  - Agent 2: GPT-4o (Validator) - Selector 검증
+  - Weighted Consensus: Claude 30% + GPT-4o 30% + Extraction 40%
+  - Threshold: 0.7
 
-UC3 (New Site Discovery): 1-Agent
-  - Agent: GPT-4o (Discoverer) - DOM 분석 + Selector 생성
-  - Confidence: 0.0 ~ 1.0
+UC3 (New Site Discovery): 2-Agent Consensus
+  - Agent 1: Claude Sonnet 4.5 (Proposer) - DOM 분석 + Selector 생성
+  - Agent 2: GPT-4o (Validator) - Selector 검증
+  - Weighted Consensus: Claude 30% + GPT-4o 30% + Extraction 40%
 
 공식 LangGraph 패턴 사용:
 =======================================
@@ -1145,7 +1146,7 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
             "url": state["url"],
             "site_name": state["site_name"],
             "html_content": state.get("html_content"),
-            "gpt_proposal": None,
+            "claude_proposal": None,
             "gpt_validation": None,
             "consensus_reached": False,
             "retry_count": 0,
@@ -1166,15 +1167,15 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
         final_selectors = uc2_result.get("final_selectors")
 
         # 합의 점수 계산 (UC2에서 계산한 값 사용)
-        gpt_proposal = uc2_result.get("gpt_proposal", {})
+        claude_proposal = uc2_result.get("claude_proposal", {})
         gpt_validation = uc2_result.get("gpt_validation", {})
 
-        gpt_confidence = gpt_proposal.get("confidence", 0.0) if gpt_proposal else 0.0
+        claude_confidence = claude_proposal.get("confidence", 0.0) if claude_proposal else 0.0
         gpt4o_confidence = gpt_validation.get("confidence", 0.0) if gpt_validation else 0.0
 
         # 간단한 합의 점수 (실제로는 uc2_hitl.py의 calculate_consensus_score 사용)
         consensus_score = (
-            gpt_confidence * 0.3
+            claude_confidence * 0.3
             + gpt4o_confidence * 0.3
             + (1.0 if consensus_reached else 0.0) * 0.4
         )
@@ -1191,8 +1192,8 @@ def uc2_self_heal_node(state: MasterCrawlState) -> Command[Literal["supervisor"]
                     "consensus_reached": consensus_reached,
                     "consensus_score": round(consensus_score, 2),
                     "proposed_selectors": final_selectors,
-                    "gpt_analysis": gpt_proposal,
-                    "gpt_validation": gpt_validation,
+                    "claude_analysis": claude_proposal,
+                    "gpt4o_validation": gpt_validation,
                 },
                 "current_uc": "uc2",
                 "workflow_history": state.get("workflow_history", [])

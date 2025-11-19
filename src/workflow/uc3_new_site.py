@@ -194,9 +194,9 @@ class UC3State(TypedDict, total=False):
     """
 
     # === NEW: 2-Agent Consensus System ===
-    gpt_proposal: dict
+    claude_proposal: dict
     """
-    GPT-4o Agent (Proposer) 제안
+    Claude Sonnet 4.5 Agent (Proposer) 제안
     {
         "selectors": {
             "title": {"selector": "...", "confidence": 0.95, "reasoning": "..."},
@@ -207,8 +207,8 @@ class UC3State(TypedDict, total=False):
     }
     """
 
-    gpt_confidence: float
-    """GPT-4o의 전체 신뢰도 (0.0-1.0)"""
+    claude_confidence: float
+    """Claude Sonnet 4.5의 전체 신뢰도 (0.0-1.0)"""
 
     gpt4o_validation: dict
     """
@@ -234,7 +234,7 @@ class UC3State(TypedDict, total=False):
     consensus_score: float
     """
     가중 합의 점수 (0.0-1.0)
-    Formula: 0.3 × GPT + 0.3 × Gemini + 0.4 × Extraction Quality
+    Formula: 0.3 × Claude + 0.3 × GPT-4o + 0.4 × Extraction Quality
     """
 
     consensus_reached: bool
@@ -1300,12 +1300,12 @@ def beautifulsoup_analyze_node(state: UC3State) -> dict:
         return {**state, "beautifulsoup_analysis": {"success": False, "error": str(e)}}
 
 
-# --- Agent 1: GPT-4o Proposer (with Tools) ---
+# --- Agent 1: Claude Sonnet 4.5 Proposer (with Tools) ---
 
 
-def gpt_discover_agent_node(state: UC3State) -> dict:
+def claude_discover_agent_node(state: UC3State) -> dict:
     """
-    Agent 1: GPT-4o Proposer with Few-Shot Examples + Tools
+    Agent 1: Claude Sonnet 4.5 Proposer with Few-Shot Examples + Tools
 
     목적:
         Few-Shot Examples와 Tool 결과를 종합하여 CSS 셀렉터를 제안합니다.
@@ -1317,7 +1317,7 @@ def gpt_discover_agent_node(state: UC3State) -> dict:
         - BeautifulSoup Analysis (DOM 통계)
 
     출력:
-        gpt_proposal: {
+        claude_proposal: {
             "selectors": {
                 "title": {"selector": "...", "confidence": 0.95, "reasoning": "..."},
                 "body": {"selector": "...", "confidence": 0.88, "reasoning": "..."},
@@ -1383,8 +1383,8 @@ Generate CSS selectors for title, body, and date based on the above information.
         logger.error("[UC3 Agent 1] ❌ ANTHROPIC_API_KEY not set")
         return {
             **state,
-            "gpt_proposal": {"error": "ANTHROPIC_API_KEY not configured"},
-            "gpt_confidence": 0.0,
+            "claude_proposal": {"error": "ANTHROPIC_API_KEY not configured"},
+            "claude_confidence": 0.0,
         }
 
     # Use Claude Sonnet 4.5 for selector generation
@@ -1426,8 +1426,8 @@ Generate CSS selectors for title, body, and date based on the above information.
 
         return {
             **state,
-            "gpt_proposal": claude_output,  # Keep field name for backward compatibility
-            "gpt_confidence": overall_conf,
+            "claude_proposal": claude_output,  # Keep field name for backward compatibility
+            "claude_confidence": overall_conf,
         }
 
     except Exception as e:
@@ -1457,16 +1457,16 @@ Generate CSS selectors for title, body, and date based on the above information.
                 f"[UC3 Agent 1] ✅ Fallback GPT-4o-mini 완료: confidence={overall_conf:.2f}"
             )
 
-            return {**state, "gpt_proposal": fallback_output, "gpt_confidence": overall_conf}
+            return {**state, "claude_proposal": fallback_output, "claude_confidence": overall_conf}
 
         except Exception as fallback_error:
             logger.error(f"[UC3 Agent 1] ❌ Fallback also failed: {fallback_error}")
             return {
                 **state,
-                "gpt_proposal": {
+                "claude_proposal": {
                     "error": f"Both Claude and GPT-4o-mini failed: {str(e)}, {str(fallback_error)}"
                 },
-                "gpt_confidence": 0.0,
+                "claude_confidence": 0.0,
             }
 
 
@@ -1591,12 +1591,12 @@ def gpt4o_validate_agent_node(state: UC3State) -> dict:
             "overall_confidence": 0.95
         }
     """
-    gpt_proposal = state.get("gpt_proposal", {})
+    claude_proposal = state.get("claude_proposal", {})
     # IMPORTANT: 검증은 full HTML로 해야 정확함
     html = state.get("raw_html", "")
 
     logger.info("[UC3 Agent 2] GPT-4o Validator 시작")
-    logger.info(f"[UC3 Agent 2] Claude Proposal: {gpt_proposal}")
+    logger.info(f"[UC3 Agent 2] Claude Proposal: {claude_proposal}")
 
     # Use GPT-4o for validation (stable, reliable, different company)
     # True 2-Agent Consensus: Claude Sonnet 4.5 (Anthropic) vs GPT-4o (OpenAI)
@@ -1615,7 +1615,7 @@ def gpt4o_validate_agent_node(state: UC3State) -> dict:
         )
 
         # GPT 제안 셀렉터 추출
-        proposed_selectors = gpt_proposal.get("selectors", {})
+        proposed_selectors = claude_proposal.get("selectors", {})
 
         # 각 셀렉터를 validate_selector_tool로 테스트
         validation_details = {}
@@ -1776,7 +1776,7 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
         extraction_quality: float (0.0-1.0)
         discovered_selectors: dict (if consensus_reached)
     """
-    gpt_conf = state.get("gpt_confidence", 0.0)
+    gpt_conf = state.get("claude_confidence", 0.0)
     gpt4o_conf = state.get("gpt4o_confidence", 0.0)
     gpt4o_validation = state.get("gpt4o_validation", {})
 
@@ -1814,8 +1814,8 @@ def calculate_uc3_consensus_node(state: UC3State) -> dict:
 
         # Fallback: GPT-4o가 best_selectors를 반환하지 않으면 GPT proposal 사용
         if not best_selectors:
-            gpt_proposal = state.get("gpt_proposal", {})
-            gpt_selectors = gpt_proposal.get("selectors", {})
+            claude_proposal = state.get("claude_proposal", {})
+            gpt_selectors = claude_proposal.get("selectors", {})
             if gpt_selectors:
                 best_selectors = {
                     "title": gpt_selectors.get("title", {}).get("selector", ""),
@@ -1885,7 +1885,7 @@ def create_uc3_agent():
     graph.add_node("simple_preprocess", simple_preprocess_node)  # Firecrawl 대체
     # graph.add_node("tavily_search", tavily_search_node)  # REMOVED - not needed
     graph.add_node("beautifulsoup_analyze", beautifulsoup_analyze_node)
-    graph.add_node("gpt_discover_agent", gpt_discover_agent_node)
+    graph.add_node("gpt_discover_agent", claude_discover_agent_node)
     graph.add_node("gpt4o_validate_agent", gpt4o_validate_agent_node)
     graph.add_node("calculate_consensus", calculate_uc3_consensus_node)
     graph.add_node("save_selectors", save_selectors_node)
@@ -1966,7 +1966,7 @@ if __name__ == "__main__":
 
     # Consensus 디버깅
     logger.info(f"\n=== Consensus Details ===")
-    logger.info(f"GPT Confidence: {result.get('gpt_confidence', 0):.2f}")
+    logger.info(f"GPT Confidence: {result.get('claude_confidence', 0):.2f}")
     logger.info(f"GPT-4o Confidence: {result.get('gpt4o_confidence', 0):.2f}")
     logger.info(f"Extraction Quality: {result.get('extraction_quality', 0):.2f}")
     logger.info(f"Consensus Score: {result.get('consensus_score', 0):.2f}")

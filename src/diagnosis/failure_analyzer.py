@@ -15,8 +15,8 @@ class FailureAnalyzer:
 
     @staticmethod
     def analyze_consensus_failure(
-        gpt_confidence: float,
-        gemini_confidence: float,
+        claude_confidence: float,
+        gpt4o_confidence: float,
         extraction_quality: float,
         threshold: float,
         use_case: str = "UC2",
@@ -25,10 +25,10 @@ class FailureAnalyzer:
         Analyze Consensus failure with detailed breakdown
 
         Args:
-            gpt_confidence: GPT confidence score (0.0-1.0)
-            gemini_confidence: Gemini confidence score (0.0-1.0)
+            claude_confidence: Claude confidence score (0.0-1.0)
+            gpt4o_confidence: GPT-4o confidence score (0.0-1.0)
             extraction_quality: Extraction quality score (0.0-1.0)
-            threshold: Consensus threshold (0.5 for UC2, 0.55 for UC3)
+            threshold: Consensus threshold (0.7 for UC2, 0.7 for UC3)
             use_case: Which use case (UC2 or UC3)
 
         Returns:
@@ -42,36 +42,36 @@ class FailureAnalyzer:
 
         Examples:
             >>> result = FailureAnalyzer.analyze_consensus_failure(
-            ...     gpt_confidence=0.5,
-            ...     gemini_confidence=0.3,
+            ...     claude_confidence=0.5,
+            ...     gpt4o_confidence=0.3,
             ...     extraction_quality=0.4,
-            ...     threshold=0.5
+            ...     threshold=0.7
             ... )
             >>> print(result["score"])  # 0.42
-            >>> print(result["root_cause"])  # "gemini_low"
+            >>> print(result["root_cause"])  # "gpt4o_low"
         """
 
         # Calculate consensus score (weighted average)
-        score = gpt_confidence * 0.3 + gemini_confidence * 0.3 + extraction_quality * 0.4
+        score = claude_confidence * 0.3 + gpt4o_confidence * 0.3 + extraction_quality * 0.4
 
         # Individual contributions
         breakdown = {
-            "gpt_contribution": round(gpt_confidence * 0.3, 3),
-            "gemini_contribution": round(gemini_confidence * 0.3, 3),
+            "claude_contribution": round(claude_confidence * 0.3, 3),
+            "gpt4o_contribution": round(gpt4o_confidence * 0.3, 3),
             "extraction_contribution": round(extraction_quality * 0.4, 3),
-            "gpt_confidence": round(gpt_confidence, 3),
-            "gemini_confidence": round(gemini_confidence, 3),
+            "claude_confidence": round(claude_confidence, 3),
+            "gpt4o_confidence": round(gpt4o_confidence, 3),
             "extraction_quality": round(extraction_quality, 3),
         }
 
         # Identify root cause (lowest component)
-        if gemini_confidence < 0.4:
-            root_cause = "gemini_low"
-            explanation = f"Gemini Validator가 GPT 제안을 검증하지 못했습니다 (신뢰도: {gemini_confidence:.2f})"
-        elif gpt_confidence < 0.4:
-            root_cause = "gpt_low"
+        if gpt4o_confidence < 0.4:
+            root_cause = "gpt4o_low"
+            explanation = f"GPT-4o Validator가 Claude 제안을 검증하지 못했습니다 (신뢰도: {gpt4o_confidence:.2f})"
+        elif claude_confidence < 0.4:
+            root_cause = "claude_low"
             explanation = (
-                f"GPT Proposer가 낮은 신뢰도로 제안했습니다 (신뢰도: {gpt_confidence:.2f})"
+                f"Claude Proposer가 낮은 신뢰도로 제안했습니다 (신뢰도: {claude_confidence:.2f})"
             )
         elif extraction_quality < 0.4:
             root_cause = "extraction_low"

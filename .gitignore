@@ -65,3 +65,9 @@ dmypy.json
 
 # LangGraph
 .langgraph_api/
+
+# Handoff Packages
+crawlagent_*.tar.gz
+
+# Archived Files
+archived/
